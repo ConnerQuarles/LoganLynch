@@ -34,3 +34,8 @@ placement without a clear resets it.
   piece is lifted above the finger so you can see the drop target.
 - Best score persists in `localStorage`, wrapped in try/catch so blocked storage
   degrades to a session-only score rather than breaking the game.
+
+## Also in this repo
+
+[`clipper/`](clipper/README.md) — an OpusClip-style tool that cuts the best 30-second
+vertical, captioned clip from any video.
