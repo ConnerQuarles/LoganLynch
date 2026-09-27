@@ -1,0 +1,586 @@
+<title>Clipper</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Single dark look on purpose: it's an editing bay, and video reads best on dark. */
+:root{
+  color-scheme:dark;
+  --bg:#101318; --panel:#171b22; --panel-2:#1e232c; --line:#2b313c;
+  --ink:#eef1f5; --dim:#8e97a6; --faint:#5d6574;
+  --tape:#ff8a3d; --tape-ink:#1a0e05;
+  --good:#3ddc97; --ok:#f5c84b; --meh:#ff9a52; --bad:#ff5c6c;
+  --f-display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --f-body:"Figtree",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);padding-inline:16px}
+main{max-width:1120px;margin:0 auto;padding-block:36px 64px;display:grid;gap:22px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,5vw,44px);font-weight:800;letter-spacing:-.02em;line-height:1}
+h1 em{font-style:normal;color:var(--tape)}
+.lede{color:var(--dim);max-width:62ch;margin:8px 0 0}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--tape);outline-offset:2px}
+
+/* Setup row */
+.setup{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
+@media (max-width:760px){.setup{grid-template-columns:1fr}}
+.drop{display:grid;place-items:center;text-align:center;gap:6px;min-height:170px;border:1.5px dashed var(--line);
+  border-radius:14px;background:var(--panel);padding:24px;cursor:pointer;transition:border-color .15s,background .15s}
+.drop:hover,.drop.over{border-color:var(--tape);background:var(--panel-2)}
+.drop strong{font-family:var(--f-display);font-size:19px}
+.drop small{color:var(--dim)}
+.drop .file{font-family:var(--f-mono);font-size:13px;color:var(--tape);word-break:break-all}
+.opts{background:var(--panel);border-radius:14px;padding:18px;display:grid;gap:14px;align-content:start}
+.field{display:grid;gap:6px}
+.field>span{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
+.seg{display:flex;flex-wrap:wrap;gap:6px}
+.seg button{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:6px 12px}
+.seg button[aria-pressed="true"]{background:var(--tape);color:var(--tape-ink);border-color:var(--tape);font-weight:600}
+input[type=range]{accent-color:var(--tape);width:100%}
+.go{background:var(--tape);color:var(--tape-ink);border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:16px}
+.go:disabled{opacity:.45;cursor:not-allowed}
+.hint{color:var(--faint);font-size:13px;margin:0}
+
+/* Status + timeline */
+.status{display:flex;gap:10px;align-items:center;color:var(--dim);min-height:24px}
+.status .dot{width:9px;height:9px;border-radius:50%;background:var(--tape);flex:none;animation:pulse 1s ease-in-out infinite}
+.status.idle .dot{animation:none;background:var(--faint)}
+.status.err{color:var(--bad)} .status.err .dot{background:var(--bad);animation:none}
+@keyframes pulse{50%{opacity:.25}}
+.timeline{background:var(--panel);border-radius:14px;padding:14px 16px 10px}
+.timeline header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.timeline h2{font-size:16px}
+.timeline header span{color:var(--dim);font-size:13px}
+#wave{width:100%;height:92px;display:block}
+
+/* Clip cards */
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:16px}
+.clip{background:var(--panel);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.frame{position:relative;background:#000;aspect-ratio:9/16;max-width:100%}
+.frame canvas,.frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.rank{position:absolute;top:10px;left:10px;background:#000b;border-radius:99px;padding:2px 9px;font-weight:600;font-size:13px}
+.tc{position:absolute;bottom:10px;left:10px;background:#000b;border-radius:6px;padding:2px 7px;font-size:12px}
+.body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
+.head{display:flex;gap:12px;align-items:center}
+.ring{flex:none;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;
+  background:conic-gradient(var(--c) calc(var(--s)*1%),var(--line) 0)}
+.ring b{width:47px;height:47px;border-radius:50%;background:var(--panel);display:grid;place-items:center;
+  font:800 19px var(--f-display);color:var(--c)}
+.head h3{font-size:16px;line-height:1.25}
+.head small{color:var(--dim);font-size:12px}
+.bars{display:grid;gap:5px}
+.bar{display:grid;grid-template-columns:42px 1fr 26px;gap:8px;align-items:center;font-size:12px;color:var(--dim)}
+.bar i{height:5px;border-radius:3px;background:var(--line);overflow:hidden;display:block}
+.bar i::after{content:"";display:block;height:100%;width:calc(var(--v)*1%);background:var(--c)}
+.bar em{font-style:normal;text-align:right;color:var(--ink)}
+.why{margin:0;font-size:14px;color:#cfd5de}
+.actions{margin-top:auto;display:flex;gap:8px;flex-wrap:wrap}
+.btn{flex:1;border-radius:9px;padding:9px 12px;font-weight:600;border:1px solid var(--line);background:var(--panel-2)}
+.btn.primary{background:var(--tape);color:var(--tape-ink);border-color:var(--tape)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.prog{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--tape);transition:width .2s linear}
+.note{font-size:12px;color:var(--dim);margin:0}
+.sample-tag{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--tape);
+  border:1px solid var(--tape);border-radius:99px;padding:1px 8px;margin-left:8px;vertical-align:middle}
+.method{color:var(--dim);font-size:13px;margin:0}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<main>
+  <header>
+    <h1>Clip<em>per</em></h1>
+    <p class="lede">Drop in a long video. Clipper finds its best 30-second moments, rates each out of 100 and turns
+      them into vertical 9:16 clips. Everything runs in your browser; your video is never uploaded.</p>
+  </header>
+
+  <section class="setup">
+    <label class="drop" id="drop" for="file">
+      <strong>Drop a video or click to choose</strong>
+      <small>MP4 or WebM works best · up to a few hundred MB</small>
+      <span class="file" id="fileName"></span>
+      <input type="file" id="file" accept="video/*" hidden>
+    </label>
+    <div class="opts">
+      <div class="field"><span>Clips</span>
+        <div class="seg" id="count" role="group" aria-label="Number of clips">
+          <button type="button" data-v="3" aria-pressed="false">3</button>
+          <button type="button" data-v="5" aria-pressed="true">5</button>
+          <button type="button" data-v="8" aria-pressed="false">8</button>
+        </div>
+      </div>
+      <div class="field"><span>Vertical layout</span>
+        <div class="seg" id="layout" role="group" aria-label="Vertical layout">
+          <button type="button" data-v="fit" aria-pressed="true">Fit + blur</button>
+          <button type="button" data-v="fill" aria-pressed="false">Fill (crop)</button>
+        </div>
+      </div>
+      <div class="field" id="focusField" hidden><span>Crop focus <span class="mono" id="focusVal">50%</span></span>
+        <input type="range" id="focus" min="0" max="100" value="50" aria-label="Crop focus, left to right">
+      </div>
+      <button class="go" id="go" disabled>Find clips</button>
+      <p class="hint" id="aiHint">Claude rates each moment from its frames and audio. Your first run asks permission to use your Claude account.</p>
+    </div>
+  </section>
+
+  <div class="status idle" id="status" role="status"><span class="dot"></span><span id="statusText">Showing an example. Choose a video to find your own clips.</span></div>
+
+  <section class="timeline">
+    <header><h2>Audio energy <span class="sample-tag" id="sampleTag">Example</span></h2><span id="tlInfo">Clip windows are numbered by rank</span></header>
+    <canvas id="wave" height="92"></canvas>
+  </section>
+
+  <p class="method" id="method"></p>
+  <section class="clips" id="clips" aria-live="polite"></section>
+</main>
+
+<script>
+(() => {
+"use strict";
+const CLIP = 30, HOP = 0.5, OUT_W = 720, OUT_H = 1280;
+const $ = id => document.getElementById(id);
+const state = { file: null, url: null, duration: 0, loud: null, clips: [], vw: 16, vh: 9,
+  count: 5, layout: "fit", focus: 0.5, busy: false, example: true };
+const cap = { sample: null, downloads: null };
+
+// ---- capabilities: render without them, light up when they resolve --------------
+if (window.claude?.use) {
+  window.claude.use("sample").then(s => { cap.sample = s; aiHint(); }).catch(() => {});
+  window.claude.use("downloads").then(d => { cap.downloads = d; }).catch(() => {});
+}
+function aiHint(){
+  $("aiHint").textContent = cap.sample
+    ? "Claude rates each moment from its frames and audio. Your first run asks permission to use your Claude account."
+    : "Moments are rated by audio energy (Claude rating isn't available in this view).";
+}
+setTimeout(aiHint, 10500);
+
+// ---- controls -------------------------------------------------------------------
+function segment(id, key, cast = v => v){
+  $(id).addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    for (const x of $(id).children) x.setAttribute("aria-pressed", String(x === b));
+    state[key] = cast(b.dataset.v);
+    if (key === "layout") $("focusField").hidden = state.layout !== "fill";
+    if (key === "layout" || key === "focus") drawAllPosters();
+  });
+}
+segment("count", "count", Number);
+segment("layout", "layout");
+$("focus").addEventListener("input", e => {
+  state.focus = e.target.value / 100; $("focusVal").textContent = e.target.value + "%"; drawAllPosters();
+});
+const drop = $("drop");
+["dragenter","dragover"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave","drop"].forEach(t => drop.addEventListener(t, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => e.dataTransfer.files[0] && pickFile(e.dataTransfer.files[0]));
+$("file").addEventListener("change", e => e.target.files[0] && pickFile(e.target.files[0]));
+$("go").addEventListener("click", () => run());
+
+function pickFile(f){
+  if (state.busy) return;
+  if (state.url) URL.revokeObjectURL(state.url);
+  state.file = f; state.url = URL.createObjectURL(f);
+  $("fileName").textContent = `${f.name} · ${(f.size / 1048576).toFixed(0)} MB`;
+  $("go").disabled = false;
+  setStatus(`Ready. Pick how many clips, then press Find clips.`, "idle");
+}
+function setStatus(text, kind = "busy"){
+  $("status").className = "status " + (kind === "busy" ? "" : kind);
+  $("statusText").textContent = text;
+}
+const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const tier = s => s >= 80 ? "var(--good)" : s >= 60 ? "var(--ok)" : s >= 40 ? "var(--meh)" : "var(--bad)";
+
+// ---- media helpers --------------------------------------------------------------
+function loadVideo(url){
+  return new Promise((res, rej) => {
+    const v = document.createElement("video");
+    v.preload = "auto"; v.playsInline = true; v.muted = true; v.src = url;
+    v.onloadedmetadata = () => res(v);
+    v.onerror = () => rej(new Error("This browser can't play that video. Try an MP4 (H.264) or WebM file."));
+  });
+}
+function seek(v, t){
+  return new Promise(res => {
+    const done = () => { v.removeEventListener("seeked", done); res(); };
+    v.addEventListener("seeked", done);
+    v.currentTime = Math.min(Math.max(0, t), Math.max(0, v.duration - 0.05));
+  });
+}
+
+async function loudnessCurve(file){
+  // Decoding needs the whole file in memory; big files can fail, handled by caller.
+  const buf = await file.arrayBuffer();
+  const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const actx = new Ctx(1, 44100, 44100);
+  const audio = await actx.decodeAudioData(buf);
+  const ch = audio.getChannelData(0), rate = audio.sampleRate, step = Math.floor(rate * HOP);
+  const out = new Float32Array(Math.floor(ch.length / step));
+  for (let i = 0; i < out.length; i++){
+    let sum = 0;
+    for (let j = i * step, e = j + step; j < e; j += 4) sum += ch[j] * ch[j];
+    out[i] = 20 * Math.log10(Math.sqrt(sum / (step / 4)) + 1e-6);
+  }
+  return out;
+}
+
+// ---- scoring (mirrors the Python heuristic) --------------------------------------
+function scoreWindows(loud, duration){
+  const n = loud.length, mean = loud.reduce((a, b) => a + b, 0) / n;
+  const sd = Math.sqrt(loud.reduce((a, b) => a + (b - mean) ** 2, 0) / n) + 1e-6;
+  const z = Array.from(loud, v => (v - mean) / sd);
+  const win = Math.round(CLIP / HOP), hookN = Math.round(3 / HOP), cands = [];
+  for (let start = 0; start <= duration - CLIP + 0.01; start += 1){
+    const i = Math.round(start / HOP), chunk = z.slice(i, i + win);
+    if (chunk.length < win * 0.8) continue;
+    const live = chunk.filter(v => v >= -1.5);
+    const lm = live.reduce((a, b) => a + b, 0) / (live.length || 1);
+    const dyn = live.length > 1 ? Math.sqrt(live.reduce((a, b) => a + (b - lm) ** 2, 0) / live.length) : 0;
+    const dead = chunk.filter(v => v < -1.5).length / chunk.length;
+    const hook = chunk.slice(0, hookN).reduce((a, b) => a + b, 0) / hookN;
+    const value = chunk.reduce((a, b) => a + b, 0) / chunk.length + 0.3 * dyn;
+    const flow = -1.5 * dead;
+    cands.push({ start, end: start + CLIP, hookRaw: hook, flowRaw: flow, valueRaw: value,
+      raw: 0.5 * hook + flow + value, dead });
+  }
+  // Percentile within this video, spread over 35-95.
+  const pct = { raw: "score", hookRaw: "hook", flowRaw: "flow", valueRaw: "value" };
+  for (const [k, out] of Object.entries(pct)){
+    const order = cands.map((c, i) => i).sort((a, b) => cands[a][k] - cands[b][k]);
+    order.forEach((ci, rank) => {
+      cands[ci][out] = Math.round(35 + 60 * (cands.length > 1 ? rank / (cands.length - 1) : 0.5));
+    });
+  }
+  return cands;
+}
+function nonOverlapping(list, count, key = "score"){
+  const kept = [];
+  for (const c of [...list].sort((a, b) => b[key] - a[key])){
+    if (kept.every(k => Math.min(c.end, k.end) - Math.max(c.start, k.start) <= 2)) kept.push(c);
+    if (kept.length === count) break;
+  }
+  return kept;
+}
+
+// ---- Claude rating from contact sheets --------------------------------------------
+async function contactSheet(v, clip){
+  const portrait = state.vh > state.vw;
+  const cw = portrait ? 180 : 400, ch = Math.round(cw * state.vh / state.vw);
+  const cols = portrait ? 4 : 2, rows = portrait ? 1 : 2;
+  const c = document.createElement("canvas"); c.width = cw * cols; c.height = ch * rows;
+  const g = c.getContext("2d");
+  const times = [1, 9, 18, 27].map(t => clip.start + Math.min(t, clip.end - clip.start - 0.5));
+  for (let k = 0; k < 4; k++){
+    await seek(v, times[k]);
+    g.drawImage(v, (k % cols) * cw, Math.floor(k / cols) * ch, cw, ch);
+  }
+  return new Promise(res => c.toBlob(res, "image/jpeg", 0.72));
+}
+
+async function rateWithClaude(v, cands){
+  const limits = await cap.sample.limits().catch(() => null);
+  if (!limits?.images) return null;
+  const list = cands.slice(0, Math.min(cands.length, limits.images.maxCount));
+  const images = [];
+  for (const [i, c] of list.entries()){
+    setStatus(`Grabbing frames for moment ${i + 1} of ${list.length}…`);
+    images.push(await contactSheet(v, c));
+  }
+  const rows = list.map((c, i) =>
+    `${i + 1}. ${fmt(c.start)}-${fmt(c.end)} | audio energy percentile ${c.value} | opening-3s energy percentile ${c.hook} | dead air ${Math.round(c.dead * 100)}%`
+  ).join("\n");
+  const prompt =
+`I'm cutting vertical 30-second shorts (TikTok/Reels/Shorts) from a ${Math.round(state.duration)}-second video called "${state.file.name}".
+Below are ${list.length} candidate moments. Image N is a contact sheet of candidate N: four frames at roughly 1s, 9s, 18s and 27s into the clip, left-to-right then top-to-bottom. You can't hear the audio, so the audio stats are listed for each (percentiles are relative to the rest of this video).
+
+${rows}
+
+Rate each candidate 0-100 on:
+- hook: would the opening grab someone scrolling?
+- flow: does it look like a coherent, self-contained moment rather than a random slice?
+- value: is something visibly happening (action, emotion, a reveal, a strong on-screen moment)?
+- score: overall likelihood it performs as a short.
+Calibrate honestly and use the whole range: 90+ is rare and exceptional, 70-89 strong, 50-69 usable, below 50 weak. Talking-head footage can still score well when the audio energy suggests an animated delivery.
+Give each a punchy title of at most 7 words and one sentence explaining the score.
+
+Reply with only a JSON array, one object per candidate, in order:
+[{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"..."}]`;
+  setStatus("Claude is rating the moments… (this can take up to a minute)");
+  const out = await cap.sample.json(prompt, { images });
+  if (!Array.isArray(out)) return null;
+  const clamp = x => Math.max(0, Math.min(100, Math.round(Number(x) || 0)));
+  const rated = [];
+  for (const r of out){
+    const c = list[Number(r?.n) - 1];
+    if (!c || rated.includes(c)) continue;
+    Object.assign(c, { title: String(r.title || "").slice(0, 80) || "Highlight",
+      reason: String(r.reason || "").slice(0, 300), hook: clamp(r.hook), flow: clamp(r.flow),
+      value: clamp(r.value), score: clamp(r.score), by: "claude" });
+    rated.push(c);
+  }
+  return rated.length ? rated : null;
+}
+
+// ---- main flow ------------------------------------------------------------------
+async function run(){
+  if (!state.file || state.busy) return;
+  state.busy = true; state.example = false; $("go").disabled = true; $("sampleTag").hidden = true;
+  $("clips").innerHTML = ""; $("method").textContent = "";
+  try {
+    setStatus("Reading video…");
+    const v = await loadVideo(state.url);
+    state.duration = v.duration; state.vw = v.videoWidth || 16; state.vh = v.videoHeight || 9;
+    if (!isFinite(state.duration) || state.duration <= 0) throw new Error("Couldn't read the video's length.");
+
+    setStatus("Measuring audio energy…");
+    try { state.loud = await loudnessCurve(state.file); }
+    catch { state.loud = null; }
+    if (!state.loud || state.loud.length < 4) state.loud = new Float32Array(Math.max(4, Math.ceil(state.duration / HOP)));
+
+    let picks;
+    if (state.duration <= CLIP + 0.5){
+      picks = [{ start: 0, end: state.duration, score: 65, hook: 65, flow: 65, value: 65, dead: 0,
+        title: "Full video", reason: "The video is already 30 seconds or shorter.", by: "heuristic" }];
+    } else {
+      const cands = scoreWindows(state.loud, state.duration);
+      const shortlist = nonOverlapping(cands, Math.min(12, state.count * 2));
+      shortlist.forEach((c, i) => Object.assign(c, { title: `Moment ${i + 1}`, by: "heuristic",
+        reason: c.score >= 80 ? "One of the most energetic stretches of audio in this video."
+          : c.score >= 55 ? "Steady energy, but calmer than the top moments."
+          : "A quieter stretch, included to reach your clip count." }));
+      let rated = null;
+      if (cap.sample){
+        try { rated = await rateWithClaude(v, shortlist); }
+        catch (e) { $("method").textContent = claudeError(e); }
+      }
+      picks = nonOverlapping(rated || shortlist, state.count);
+    }
+    picks.sort((a, b) => b.score - a.score);
+    state.clips = picks;
+    const byClaude = picks[0]?.by === "claude";
+    if (!$("method").textContent) $("method").textContent = byClaude
+      ? "Rated by Claude from four frames per moment plus the audio stats. It can't hear speech, so treat scores as a ranking."
+      : "Rated by audio energy: scores rank moments within this video and don't judge what's said or shown.";
+
+    setStatus("Making previews…");
+    for (const c of picks){
+      await seek(v, c.start + Math.min(3, (c.end - c.start) / 2));
+      const p = document.createElement("canvas"); p.width = 270; p.height = 480;
+      drawFrame(p.getContext("2d"), v, 270, 480); c.poster = p; c.posterSrc = await snapshot(v);
+    }
+    drawTimeline(); renderCards();
+    setStatus(`Found ${picks.length} clip${picks.length === 1 ? "" : "s"}. Render any of them below.`, "idle");
+  } catch (e) {
+    setStatus(e.message || "Something went wrong reading that video.", "err");
+  } finally {
+    state.busy = false; $("go").disabled = !state.file;
+  }
+}
+function claudeError(e){
+  switch (e?.code){
+    case "not_granted": case "sampling_disabled": case "images_unavailable":
+      return "Claude rating is off for this view, so moments were rated by audio energy only.";
+    case "rate_limited": return "Claude is rate-limited right now, so moments were rated by audio energy. Try again in a bit.";
+    default: return "Claude couldn't rate these moments this time, so they were rated by audio energy.";
+  }
+}
+function snapshot(v){ // keep a still of the source frame for re-drawing posters when the layout changes
+  const c = document.createElement("canvas"); c.width = Math.min(640, v.videoWidth); c.height = Math.round(c.width * v.videoHeight / v.videoWidth);
+  c.getContext("2d").drawImage(v, 0, 0, c.width, c.height); return c;
+}
+
+// ---- drawing a vertical frame ----------------------------------------------------
+const blurCanvas = document.createElement("canvas"); blurCanvas.width = 18; blurCanvas.height = 32;
+function drawFrame(g, src, W, H){
+  const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
+  if (!sw || !sh) return;
+  const portrait = sw / sh <= W / H + 0.01;
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = "high";
+  if (portrait || state.layout === "fill"){
+    const scale = Math.max(W / sw, H / sh), dw = sw * scale, dh = sh * scale;
+    const x = portrait ? (W - dw) / 2 : -(dw - W) * state.focus;
+    g.drawImage(src, x, (H - dh) / 2, dw, dh);
+    return;
+  }
+  // Fit: tiny cover copy scaled up = soft blur that works in every browser.
+  const b = blurCanvas.getContext("2d"), bs = Math.max(18 / sw, 32 / sh);
+  b.drawImage(src, (18 - sw * bs) / 2, (32 - sh * bs) / 2, sw * bs, sh * bs);
+  g.drawImage(blurCanvas, 0, 0, W, H);
+  g.fillStyle = "rgba(0,0,0,.28)"; g.fillRect(0, 0, W, H);
+  const fh = W * sh / sw;
+  g.drawImage(src, 0, (H - fh) / 2, W, fh);
+}
+function drawAllPosters(){
+  for (const c of state.clips){
+    if (!c.posterSrc || !c.poster) continue;
+    drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480);
+  }
+}
+
+// ---- timeline -------------------------------------------------------------------
+function drawTimeline(){
+  const cv = $("wave"), dpr = window.devicePixelRatio || 1, w = cv.clientWidth, h = 92;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const g = cv.getContext("2d"); g.scale(dpr, dpr); g.clearRect(0, 0, w, h);
+  const css = getComputedStyle(document.documentElement);
+  const loud = state.loud, n = loud.length, top = 18, base = h - 16;
+  let lo = Infinity, hi = -Infinity; for (const v of loud){ if (v > -90){ lo = Math.min(lo, v); hi = Math.max(hi, v); } }
+  if (!isFinite(lo)){ lo = -60; hi = 0; }
+  const x = i => (i / Math.max(1, n - 1)) * w, y = v => base - Math.max(0, (v - lo) / (hi - lo || 1)) * (base - top);
+  // clip windows under the wave
+  state.clips.forEach((c, i) => {
+    const x0 = c.start / state.duration * w, x1 = c.end / state.duration * w;
+    g.fillStyle = "rgba(255,138,61,.16)"; g.fillRect(x0, top - 4, x1 - x0, base - top + 4);
+    g.fillStyle = css.getPropertyValue("--tape"); g.fillRect(x0, top - 4, x1 - x0, 2);
+    g.font = "600 11px " + css.getPropertyValue("--f-mono"); g.fillText("#" + (i + 1), x0 + 3, 11);
+  });
+  g.beginPath(); g.moveTo(0, base);
+  for (let i = 0; i < n; i++) g.lineTo(x(i), y(loud[i]));
+  g.lineTo(w, base); g.closePath(); g.fillStyle = "rgba(142,151,166,.35)"; g.fill();
+  g.fillStyle = css.getPropertyValue("--faint"); g.font = "11px " + css.getPropertyValue("--f-mono");
+  g.fillText("0:00", 0, h - 2); const end = fmt(state.duration); g.fillText(end, w - g.measureText(end).width, h - 2);
+  $("tlInfo").textContent = `${fmt(state.duration)} total · clip windows numbered by rank`;
+}
+window.addEventListener("resize", () => state.loud && drawTimeline());
+
+// ---- cards ----------------------------------------------------------------------
+function renderCards(){
+  const root = $("clips"); root.innerHTML = "";
+  state.clips.forEach((c, i) => {
+    const el = document.createElement("article"); el.className = "clip";
+    el.style.setProperty("--c", tier(c.score));
+    el.innerHTML = `
+      <div class="frame"><span class="rank">#${i + 1}</span><span class="tc mono">${fmt(c.start)} – ${fmt(c.end)}</span></div>
+      <div class="body">
+        <div class="head"><div class="ring" style="--s:${c.score}"><b>${c.score}</b></div>
+          <div><h3></h3><small>Virality score / 100</small></div></div>
+        <div class="bars">${bar("Hook", c.hook)}${bar("Flow", c.flow)}${bar("Value", c.value)}</div>
+        <p class="why"></p>
+        <div class="prog" hidden><i></i></div>
+        <p class="note" hidden></p>
+        <div class="actions"><button class="btn primary" type="button">${state.example ? "Example clip" : "Render clip"}</button></div>
+      </div>`;
+    el.querySelector("h3").textContent = c.title;
+    el.querySelector(".why").textContent = c.reason;
+    const frame = el.querySelector(".frame");
+    if (c.poster) frame.prepend(c.poster);
+    const btn = el.querySelector(".btn");
+    if (state.example) btn.disabled = true;
+    else btn.addEventListener("click", () => c.blob ? saveClip(c, i, el) : renderClip(c, i, el));
+    c.el = el; root.append(el);
+  });
+}
+const bar = (label, v) => `<div class="bar">${label}<i style="--v:${v}"></i><em class="mono">${v}</em></div>`;
+
+// ---- rendering (real time: a 30 s clip takes 30 s) --------------------------------
+function pickMime(){
+  const opts = ["video/mp4;codecs=avc1.42E01E,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus", "video/webm"];
+  return opts.find(t => window.MediaRecorder?.isTypeSupported?.(t)) || "";
+}
+let rendering = false;
+async function renderClip(c, i, el){
+  if (rendering){ note(el, "Another clip is rendering. Wait for it to finish."); return; }
+  if (!window.MediaRecorder){ note(el, "This browser can't record video. Try Chrome, Edge or Safari."); return; }
+  rendering = true;
+  const btn = el.querySelector(".btn"), prog = el.querySelector(".prog"), fill = prog.firstElementChild;
+  btn.disabled = true; btn.textContent = "Rendering…"; prog.hidden = false;
+  note(el, "Keep this tab open and visible. Rendering runs in real time.");
+  let actx;
+  try {
+    const v = document.createElement("video");
+    v.src = state.url; v.playsInline = true; v.preload = "auto"; v.muted = false;
+    await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = rej; });
+    await seek(v, c.start);
+    const cv = document.createElement("canvas"); cv.width = OUT_W; cv.height = OUT_H;
+    const g = cv.getContext("2d"); drawFrame(g, v, OUT_W, OUT_H);
+    const stream = cv.captureStream(30);
+    actx = new (window.AudioContext || window.webkitAudioContext)(); await actx.resume();
+    const dest = actx.createMediaStreamDestination();
+    actx.createMediaElementSource(v).connect(dest);  // audio goes to the file, not the speakers
+    dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+    const mime = pickMime();
+    const rec = new MediaRecorder(stream, { ...(mime && { mimeType: mime }), videoBitsPerSecond: 5e6, audioBitsPerSecond: 160e3 });
+    const chunks = []; rec.ondataavailable = e => e.data.size && chunks.push(e.data);
+    const stopped = new Promise(res => rec.onstop = res);
+
+    const frameEl = el.querySelector(".frame"), live = cv;
+    if (c.poster?.isConnected) c.poster.replaceWith(live); else frameEl.prepend(live);
+    rec.start(250); await v.play();
+    const len = c.end - c.start;
+    await new Promise(res => {
+      v.onended = res;
+      const tick = () => {
+        drawFrame(g, v, OUT_W, OUT_H);
+        fill.style.width = `${Math.min(100, (v.currentTime - c.start) / len * 100)}%`;
+        if (v.currentTime >= c.end || v.ended) return res();
+        v.requestVideoFrameCallback ? v.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
+      };
+      tick();
+    });
+    v.pause(); rec.stop(); await stopped;
+    c.blob = new Blob(chunks, { type: rec.mimeType || mime || "video/webm" });
+    c.ext = /mp4/.test(c.blob.type) ? "mp4" : "webm";
+    const out = document.createElement("video");
+    out.src = URL.createObjectURL(c.blob); out.controls = true; out.playsInline = true;
+    frameEl.querySelector("canvas")?.replaceWith(out);
+    btn.textContent = `Save .${c.ext}`;
+    note(el, cap.downloads ? `Rendered ${OUT_W}×${OUT_H}. Save it to your device.`
+      : `Rendered ${OUT_W}×${OUT_H}. Saving isn't available in this view.`);
+    if (!cap.downloads) btn.disabled = true; else btn.disabled = false;
+  } catch (e) {
+    btn.disabled = false; btn.textContent = "Render clip";
+    note(el, "Rendering failed in this browser. Try Chrome or Edge on a computer.");
+  } finally {
+    prog.hidden = true; fill.style.width = "0"; rendering = false;
+    actx?.close?.();
+  }
+}
+async function saveClip(c, i, el){
+  if (!cap.downloads) return;
+  const base = state.file.name.replace(/\.[^.]+$/, "").slice(0, 60);
+  try { await cap.downloads.save({ filename: `${base} - clip ${i + 1} (${c.score}).${c.ext}`, data: c.blob }); note(el, "Saved."); }
+  catch (e) {
+    note(el, e?.code === "declined" ? "Save cancelled." : e?.code === "too_large" ? "That file is too large to save here." : "Couldn't save the file in this view.");
+  }
+}
+function note(el, text){ const n = el.querySelector(".note"); n.hidden = !text; n.textContent = text; }
+
+// ---- example state so the page shows what it does before a video is picked --------
+(function example(){
+  state.duration = 1425;
+  const loud = new Float32Array(Math.ceil(state.duration / HOP));
+  for (let i = 0; i < loud.length; i++){
+    const t = i * HOP;
+    loud[i] = -38 + 7 * Math.sin(t / 23) + 5 * Math.sin(t / 7.3) + 3 * Math.sin(t * 1.7)
+      + (t > 312 && t < 346 ? 12 : 0) + (t > 842 && t < 874 ? 10 : 0) + (t > 1101 && t < 1133 ? 8 : 0);
+  }
+  state.loud = loud;
+  const ex = [
+    [314, 88, 91, 80, 90, "The moment the crowd erupts", "Loud opening and a clear payoff: the energy spikes in the first second and stays high."],
+    [844, 76, 70, 82, 74, "He finally admits the truth", "Strong delivery with a reveal at the end, but the first seconds are slow."],
+    [1103, 63, 58, 71, 60, "Unexpected advice that lands", "Useful point, though it trails into a quiet gap near the end."],
+  ];
+  state.clips = ex.map(([start, score, hook, flow, value, title, reason], i) => {
+    // Stand-in poster: a vertical frame of soft colour bands, clearly not real footage.
+    const p = document.createElement("canvas"); p.width = 270; p.height = 480;
+    const g = p.getContext("2d"), grad = g.createLinearGradient(0, 0, 270, 480);
+    grad.addColorStop(0, ["#3a2a4f", "#233a4f", "#3f3326"][i]); grad.addColorStop(1, "#14171d");
+    g.fillStyle = grad; g.fillRect(0, 0, 270, 480);
+    g.fillStyle = "rgba(255,255,255,.08)"; g.fillRect(0, 150, 270, 180);
+    g.fillStyle = "rgba(238,241,245,.55)"; g.font = "600 15px Figtree, system-ui, sans-serif";
+    g.textAlign = "center"; g.fillText("Example", 135, 246);
+    return { start, end: start + CLIP, score, hook, flow, value, title, reason, poster: p };
+  });
+  $("method").textContent = "Example results for a 23-minute podcast episode. Your clips appear here after you press Find clips.";
+  requestAnimationFrame(() => { drawTimeline(); renderCards(); });
+})();
+})();
+</script>
