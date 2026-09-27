@@ -17,6 +17,12 @@ main{width:100%;max-width:1100px;padding:40px 16px 64px}
 h1{font-size:28px;margin:0 0 4px;letter-spacing:-.02em}
 h1 span{color:var(--accent)}
 .sub{color:var(--dim);margin:0 0 28px}
+.link{display:flex;gap:10px;flex-wrap:wrap}
+.link input{flex:1 1 280px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;
+  padding:14px 16px;font:inherit;color:var(--ink)}
+.link input:focus{outline:none;border-color:var(--accent)}
+.link .btn{margin:0}
+.or{color:var(--dim);font-size:13px;text-align:center;margin:14px 0}
 .drop{border:2px dashed var(--line);border-radius:16px;background:var(--panel);padding:48px 20px;
   text-align:center;cursor:pointer;transition:border-color .15s,background .15s}
 .drop:hover,.drop.over{border-color:var(--accent);background:#1b1b24}
@@ -74,6 +80,12 @@ select{background:var(--panel);color:var(--ink);border:1px solid var(--line);bor
   <p class="sub">Drop in a long video. Get back its best 30-second moments as vertical, captioned shorts, each rated out of 100.</p>
 
   <section id="upload">
+    <form class="link" id="linkForm">
+      <input id="url" type="url" inputmode="url" autocomplete="off" required
+        placeholder="Paste a YouTube, TikTok, Instagram or X link" aria-label="Video link">
+      <button class="btn" type="submit">Get clips</button>
+    </form>
+    <p class="or">or upload a file</p>
     <label class="drop" id="drop">
       <strong>Drop a video here or click to choose</strong>
       <small>MP4, MOV, MKV, WebM</small>
@@ -98,7 +110,7 @@ select{background:var(--panel);color:var(--ink);border:1px solid var(--line);bor
   </section>
 </main>
 <script>
-const LABELS = {probe:"Reading video", audio:"Extracting audio", transcribe:"Transcribing",
+const LABELS = {download:"Downloading video", probe:"Reading video", audio:"Extracting audio", transcribe:"Transcribing",
   pick:"Finding & scoring the best moments", render:"Reframing & rendering clips"};
 const $ = id => document.getElementById(id);
 const drop = $("drop"), file = $("file");
@@ -114,7 +126,7 @@ function fmt(t){ const m = Math.floor(t/60), s = Math.floor(t%60); return `${m}:
 function renderSteps(stage, pct = 0){
   const keys = Object.keys(LABELS);
   const idx = stage === "upload" ? -1 : keys.indexOf(stage);
-  $("steps").innerHTML = [["upload", "Uploading"], ...keys.map(k => [k, LABELS[k]])].map(([k, label], i) => {
+  $("steps").innerHTML = [["upload", firstStep], ...keys.map(k => [k, LABELS[k]])].map(([k, label], i) => {
     const cls = (i - 1) < idx || stage === "done" ? "done" : (i - 1 === idx ? "active" : "");
     return `<li class="${cls}">${label}</li>`;
   }).join("");
@@ -125,11 +137,19 @@ function renderSteps(stage, pct = 0){
   $("bar").style.width = `${Math.round((stage === "done" ? 1 : overall) * 100)}%`;
 }
 
-function start(f){
+$("linkForm").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const url = $("url").value.trim();
+  if (url) start(null, url);
+});
+
+let firstStep = "Uploading";
+function start(f, url){
+  firstStep = f ? "Uploading" : "Sending link";
   $("upload").hidden = true; $("progress").hidden = false;
   renderSteps("upload", 0);
   const fd = new FormData();
-  fd.append("video", f);
+  if (f) fd.append("video", f); else fd.append("url", url);
   fd.append("captions", $("captions").checked ? "1" : "0");
   fd.append("count", $("count").value);
   const xhr = new XMLHttpRequest();

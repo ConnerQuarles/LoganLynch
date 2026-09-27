@@ -101,6 +101,38 @@ git pull && docker compose up -d --build  # update to the latest code
 
 (Add `-f docker-compose.traefik.yml` after `docker compose` if you used option B.)
 
+## Pasting links
+
+The page takes YouTube, TikTok, Instagram, X and direct video links as well as
+uploads. The server downloads them with yt-dlp (max 1080p, `CLIP_MAX_MINUTES`
+long).
+
+**YouTube and VPS servers:** YouTube often blocks downloads from data-center
+IPs like Hostinger's with "Sign in to confirm you're not a bot". Uploads and
+other sites still work. To get YouTube through, give the server your YouTube
+cookies:
+
+1. In Chrome on your computer, install the "Get cookies.txt LOCALLY" extension,
+   open youtube.com while logged in (a throwaway Google account is safer), and
+   export `cookies.txt`.
+2. Copy it into the container's data volume:
+   ```bash
+   scp cookies.txt root@YOUR_VPS_IP:/root/cookies.txt
+   ssh root@YOUR_VPS_IP
+   cd ~/loganlynch/clipper
+   docker compose cp /root/cookies.txt clipper:/data/cookies.txt && rm /root/cookies.txt
+   ```
+   No restart needed. Cookies expire every few weeks; repeat when the bot error comes back.
+
+**Sites change often and yt-dlp has to keep up.** If links from a site that
+used to work start failing, rebuild to get the newest yt-dlp:
+
+```bash
+docker compose build --no-cache clipper && docker compose up -d
+```
+
+Only clip videos you have the rights to use.
+
 ## Troubleshooting
 
 - **Browser says "not secure" / certificate error for a few minutes:** the

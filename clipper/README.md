@@ -16,6 +16,7 @@ Or from the command line:
 
 ```bash
 python -m clipper.pipeline my_podcast.mp4 -o clips/ -n 5
+python -m clipper.pipeline "https://www.youtube.com/watch?v=..." -o clips/
 # -> clips/clip_1.mp4 (highest score) ... plus clips/clips.json with scores
 ```
 
@@ -28,6 +29,8 @@ Hostinger VPS (works alongside an existing n8n/Traefik setup).
 
 ## What it does
 
+0. **Downloads** the video first if you pasted a link (YouTube, TikTok,
+   Instagram, X or a direct URL) instead of uploading, using yt-dlp.
 1. **Transcribes** the audio with faster-whisper, keeping per-word timestamps.
 2. **Picks and scores the clips** (default 5, max 10, never overlapping,
    best first). Each gets a 0-100 **virality score** plus **Hook** (does the
@@ -63,6 +66,9 @@ clips than it has non-overlapping 30 s windows.
 | `CLIP_MAX_MB` | `4096` | Upload size limit |
 | `CLIP_WORK_DIR` | `clipper/work` | Where uploads and clips are stored |
 | `CLIP_PASSWORD` | unset | Site password (browser login, any username). Required by the Docker deploy |
+| `CLIP_MAX_MINUTES` | `180` | Longest video a pasted link may be |
+| `CLIP_YTDLP_COOKIES` | unset | Path to a cookies.txt for YouTube bot checks |
+| `CLIP_ALLOW_PRIVATE_URLS` | unset | Allow links to local/private addresses (off for safety) |
 | `CLIP_KEEP_HOURS` | `24` | Delete uploads/clips older than this (`0` = keep forever) |
 | `PORT` | `8000` | Web UI port |
 

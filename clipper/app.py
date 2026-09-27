@@ -19,11 +19,11 @@ from pathlib import Path
 
 from flask import Flask, Response, abort, jsonify, request, send_file, send_from_directory
 
-from .pipeline import make_clips
+from .pipeline import is_url, make_clips
 
 HERE = Path(__file__).parent
 WORK = Path(os.environ.get("CLIP_WORK_DIR", HERE / "work"))
-STAGES = ["probe", "audio", "transcribe", "pick", "render", "done"]
+STAGES = ["download", "probe", "audio", "transcribe", "pick", "render", "done"]
 MAX_CLIPS = 10
 PASSWORD = os.environ.get("CLIP_PASSWORD", "")
 KEEP_HOURS = float(os.environ.get("CLIP_KEEP_HOURS", "24"))
@@ -61,7 +61,7 @@ def _cleanup() -> None:
             jobs.pop(folder.name, None)
 
 
-def _run(job_id: str, src: Path, captions: bool, count: int) -> None:
+def _run(job_id: str, src: Path | str, folder: Path, captions: bool, count: int) -> None:
     job = jobs[job_id]
 
     def progress(stage: str, pct: float) -> None:
@@ -70,8 +70,8 @@ def _run(job_id: str, src: Path, captions: bool, count: int) -> None:
     with render_lock:
         job["state"] = "running"
         try:
-            job["result"] = make_clips(src, src.parent / "clips", src.parent, progress,
-                                       captions, count)
+            job["result"] = make_clips(src, folder / "clips", folder, progress, captions, count)
+            job["name"] = job["result"].get("source_title") or job["name"]
             job["state"] = "done"
         except Exception as exc:
             traceback.print_exc()
@@ -91,22 +91,29 @@ def index():
 @app.post("/api/clip")
 def create_clip():
     f = request.files.get("video")
-    if not f or not f.filename:
-        return jsonify(error="No video uploaded"), 400
+    url = (request.form.get("url") or "").strip()
+    if not (f and f.filename) and not url:
+        return jsonify(error="Paste a video link or choose a file."), 400
+    if url and not is_url(url):
+        return jsonify(error="That doesn't look like a link. It should start with https://"), 400
     _cleanup()
     job_id = uuid.uuid4().hex[:12]
     folder = WORK / job_id
     folder.mkdir(parents=True)
-    ext = Path(f.filename).suffix.lower() or ".mp4"
-    src = folder / f"source{ext}"
-    f.save(src)
-    jobs[job_id] = {"state": "queued", "stage": "queued", "stage_pct": 0.0, "name": f.filename}
+    if f and f.filename:
+        ext = Path(f.filename).suffix.lower() or ".mp4"
+        src: Path | str = folder / f"source{ext}"
+        f.save(src)
+        name = f.filename
+    else:
+        src, name = url, "video"
+    jobs[job_id] = {"state": "queued", "stage": "queued", "stage_pct": 0.0, "name": name}
     captions = request.form.get("captions", "1") != "0"
     try:
         count = max(1, min(MAX_CLIPS, int(request.form.get("count", "5"))))
     except ValueError:
         count = 5
-    threading.Thread(target=_run, args=(job_id, src, captions, count), daemon=True).start()
+    threading.Thread(target=_run, args=(job_id, src, folder, captions, count), daemon=True).start()
     return jsonify(id=job_id)
 
 
@@ -123,7 +130,8 @@ def clip_video(job_id: str, n: int):
         abort(409)
     if not 1 <= n <= len(job["result"]["clips"]):
         abort(404)
-    name = f"{Path(job['name']).stem}_clip{n}.mp4"
+    stem = "".join(ch for ch in Path(job["name"]).stem if ch.isalnum() or ch in " -_")[:60].strip() or "video"
+    name = f"{stem}_clip{n}.mp4"
     return send_file(WORK / job_id / "clips" / f"clip_{n}.mp4", mimetype="video/mp4",
                      as_attachment=request.args.get("download") == "1", download_name=name)
 

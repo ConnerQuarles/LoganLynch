@@ -6,6 +6,9 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg fonts-dejavu-core fonts-liberation libgomp1 \
  && rm -rf /var/lib/apt/lists/*
 
+# yt-dlp needs a JavaScript runtime to download from YouTube.
+COPY --from=denoland/deno:bin /deno /usr/local/bin/deno
+
 WORKDIR /app
 COPY clipper/requirements.txt clipper/requirements.txt
 RUN pip install --no-cache-dir -r clipper/requirements.txt gunicorn
@@ -24,6 +27,9 @@ RUN if [ "$WHISPER_MODEL" != "none" ]; then \
 COPY clipper clipper
 VOLUME /data
 EXPOSE 8000
+
+# Optional cookies.txt for YouTube bot checks (see DEPLOY.md).
+ENV CLIP_YTDLP_COOKIES=/data/cookies.txt
 
 # One process on purpose: jobs live in memory, and one render already uses every core.
 CMD ["gunicorn", "-w", "1", "--threads", "8", "--timeout", "600", "-b", "0.0.0.0:8000", "clipper.app:app"]

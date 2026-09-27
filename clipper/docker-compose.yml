@@ -16,6 +16,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       CLIP_KEEP_HOURS: ${CLIP_KEEP_HOURS:-24}
       CLIP_MAX_MB: ${CLIP_MAX_MB:-4096}
+      CLIP_MAX_MINUTES: ${CLIP_MAX_MINUTES:-180}
     volumes:
       - clipper-data:/data
     healthcheck:
