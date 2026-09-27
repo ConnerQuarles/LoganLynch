@@ -1,15 +1,16 @@
-"""Clipper pipeline: long video in, one vertical 30-second highlight out.
+"""Clipper pipeline: long video in, ranked vertical 30-second highlights out.
 
 Steps:
   1. Probe the source and pull a 16 kHz mono audio track.
   2. Transcribe with faster-whisper (word timestamps) if it's available.
-  3. Pick the best 30 s window — Claude reads the transcript when an API
-     credential is configured, otherwise a loudness + speech-density heuristic.
+  3. Pick the best non-overlapping 30 s windows and score each 0-100 — Claude
+     reads the transcript when an API credential is configured, otherwise a
+     loudness + speech-density heuristic ranks windows within the video.
   4. Reframe to 9:16: follow the speaker's face, or fall back to a
      blurred-background "fit" layout when no face is found.
   5. Burn in word-by-word captions and encode an H.264/AAC MP4.
 
-Run it directly:  python -m clipper.pipeline input.mp4 -o clip.mp4
+Run it directly:  python -m clipper.pipeline input.mp4 -o clips/ -n 5
 """
 
 from __future__ import annotations
@@ -155,6 +156,10 @@ class Pick:
     title: str
     reason: str
     method: str
+    score: int = 0   # overall virality, 0-100
+    hook: int = 0    # does the first 3 s stop the scroll?
+    flow: int = 0    # clean start/end, no dead air, stands alone
+    value: int = 0   # payoff: insight, punchline, emotion
 
 
 def _window_bounds(start: float, duration: float) -> tuple[float, float]:
@@ -163,11 +168,35 @@ def _window_bounds(start: float, duration: float) -> tuple[float, float]:
     return start, start + length
 
 
+def _non_overlapping(picks: list[Pick], count: int, max_overlap: float = 2.0) -> list[Pick]:
+    """Best-first greedy: keep a clip only if it barely overlaps the ones already kept."""
+    kept: list[Pick] = []
+    for p in sorted(picks, key=lambda p: p.score, reverse=True):
+        if all(min(p.end, k.end) - max(p.start, k.start) <= max_overlap for k in kept):
+            kept.append(p)
+            if len(kept) == count:
+                break
+    return kept
+
+
+def _pct_scores(values: np.ndarray) -> np.ndarray:
+    """Percentile rank within this video, spread onto 35-95."""
+    if values.size < 2:
+        return np.full(values.size, 65.0)
+    ranks = values.argsort().argsort() / (values.size - 1)
+    return 35 + 60 * ranks
+
+
 def pick_heuristic(duration: float, loud: np.ndarray, segments: list[Segment] | None,
-                   hop: float = 0.5) -> Pick:
-    """Score every candidate start by energy, energy swings and talk density."""
+                   count: int, hop: float = 0.5) -> list[Pick]:
+    """Score every candidate window on energy, dead air and talk density.
+
+    Scores are relative to the rest of this video (a percentile), not an absolute
+    virality prediction — only the Claude picker judges content.
+    """
     if duration <= CLIP_SECONDS:
-        return Pick(0.0, duration, "Full video", "Source is already 30 s or shorter.", "heuristic")
+        return [Pick(0.0, duration, "Full video", "Source is already 30 s or shorter.",
+                     "heuristic", 65, 65, 65, 65)]
 
     # Candidates: every second, plus every sentence start so clips open cleanly.
     cands = set(np.arange(0.0, duration - CLIP_SECONDS + 0.01, 1.0).round(2).tolist())
@@ -179,7 +208,7 @@ def pick_heuristic(duration: float, loud: np.ndarray, segments: list[Segment] | 
 
     z = (loud - loud.mean()) / (loud.std() + 1e-6)
     win = int(CLIP_SECONDS / hop)
-    best, best_score = 0.0, -1e9
+    starts, hooks, flows, values = [], [], [], []
     for start in sorted(cands):
         i = int(start / hop)
         chunk = z[i:i + win]
@@ -189,25 +218,40 @@ def pick_heuristic(duration: float, loud: np.ndarray, segments: list[Segment] | 
         # Dynamics only count among the non-silent parts, so silence can't fake variety.
         live = chunk[chunk >= -1.5]
         dynamics = float(live.std()) if live.size > 1 else 0.0
-        score = chunk.mean() + 0.3 * dynamics - 1.5 * float(np.mean(chunk < -1.5))
-        # The first 3 seconds are the hook — weight them extra.
-        score += 0.5 * z[i:i + int(3 / hop)].mean()
+        dead = float(np.mean(chunk < -1.5))
+        hook = float(z[i:i + int(3 / hop)].mean())  # the first 3 seconds
+        flow = -1.5 * dead
+        value = chunk.mean() + 0.3 * dynamics
         if word_times.size:
             n = np.count_nonzero((word_times >= start) & (word_times < start + CLIP_SECONDS))
-            score += 0.35 * (n / CLIP_SECONDS)  # ~2.5 words/s of speech ≈ +0.9
+            value += 0.35 * (n / CLIP_SECONDS)  # ~2.5 words/s of speech ≈ +0.9
             if seg_starts.size and np.min(np.abs(seg_starts - start)) < 0.3:
-                score += 0.6  # opens on a sentence start
+                flow += 0.6  # opens on a sentence start
             if seg_ends.size and np.min(np.abs(seg_ends - (start + CLIP_SECONDS))) < 1.0:
-                score += 0.4  # ends near a sentence end
-        if score > best_score:
-            best, best_score = start, score
-    s, e = _window_bounds(best, duration)
-    why = "Highest energy + speech density window" if segments else "Highest audio energy window"
-    return Pick(s, e, "Highlight", why, "heuristic")
+                flow += 0.4  # ends near a sentence end
+        starts.append(start)
+        hooks.append(hook)
+        flows.append(flow)
+        values.append(value)
+    if not starts:
+        starts, hooks, flows, values = [0.0], [0.0], [0.0], [0.0]
+
+    raw = 0.5 * np.array(hooks) + np.array(flows) + np.array(values)
+    overall, hook_s, flow_s, value_s = (_pct_scores(np.array(v)) for v in (raw, hooks, flows, values))
+    why = "High energy and dense speech for this video" if segments else "High audio energy for this video"
+    picks = []
+    for k, start in enumerate(starts):
+        s, e = _window_bounds(start, duration)
+        picks.append(Pick(s, e, "Highlight", why, "heuristic", int(overall[k]),
+                          int(hook_s[k]), int(flow_s[k]), int(value_s[k])))
+    picks = _non_overlapping(picks, count)
+    for n, p in enumerate(picks, 1):
+        p.title = f"Highlight #{n}"
+    return picks
 
 
-def pick_with_claude(duration: float, segments: list[Segment]) -> Pick | None:
-    """Ask Claude for the most viral self-contained 30 s. None if unavailable."""
+def pick_with_claude(duration: float, segments: list[Segment], count: int) -> list[Pick] | None:
+    """Ask Claude for the most viral self-contained 30 s clips. None if unavailable."""
     if not segments or duration <= CLIP_SECONDS:
         return None
     if os.environ.get("CLIP_DISABLE_LLM"):
@@ -222,18 +266,34 @@ def pick_with_claude(duration: float, segments: list[Segment]) -> Pick | None:
         start_seconds: float
         title: str
         reason: str
+        hook_score: int
+        flow_score: int
+        value_score: int
+        virality_score: int
+
+    class ClipList(BaseModel):
+        clips: list[ClipChoice]
 
     lines = "\n".join(f"[{s.start:7.1f}-{s.end:7.1f}] {s.text}" for s in segments)
     prompt = (
         f"This is a timestamped transcript of a {duration:.0f}-second video. I'm cutting "
-        f"exactly one {CLIP_SECONDS:.0f}-second vertical short from it for TikTok/Reels/Shorts.\n\n"
-        "Pick the start time for the 30 seconds most likely to go viral: a strong hook in "
-        "the first 3 seconds, a complete thought that makes sense without the rest of the "
-        "video, and a payoff (punchline, insight, reveal or strong emotion) before it ends. "
-        "Start on the beginning of a sentence. The clip runs from start_seconds to "
-        f"start_seconds + {CLIP_SECONDS:.0f}, and start_seconds must be between 0 and "
-        f"{duration - CLIP_SECONDS:.1f}.\n\n"
-        "Also give a punchy title (max 8 words) and a one-sentence reason.\n\n"
+        f"up to {count} vertical shorts from it for TikTok/Reels/Shorts, each exactly "
+        f"{CLIP_SECONDS:.0f} seconds long.\n\n"
+        f"Find the {count} best clips. A great clip has a strong hook in the first 3 seconds, "
+        "a complete thought that makes sense without the rest of the video, and a payoff "
+        "(punchline, insight, reveal or strong emotion) before it ends. Each clip runs from "
+        f"start_seconds to start_seconds + {CLIP_SECONDS:.0f}; start_seconds must be between "
+        f"0 and {duration - CLIP_SECONDS:.1f} and land on the beginning of a sentence. "
+        "Clips must not overlap. Return fewer clips if the video doesn't have enough good "
+        "moments rather than padding with weak ones.\n\n"
+        "Score each clip 0-100 on:\n"
+        "- hook_score: would the first 3 seconds stop someone scrolling?\n"
+        "- flow_score: does it start and end cleanly and stand on its own?\n"
+        "- value_score: how strong is the payoff?\n"
+        "- virality_score: overall likelihood it performs as a short.\n"
+        "Calibrate honestly and use the whole range: 90+ is exceptional and rare, 70-89 is "
+        "strong, 50-69 is usable, below 50 is weak. Don't inflate scores.\n\n"
+        "Give each a punchy title (max 8 words) and a one-sentence reason for its score.\n\n"
         f"<transcript>\n{lines}\n</transcript>"
     )
     try:
@@ -244,19 +304,30 @@ def pick_with_claude(duration: float, segments: list[Segment]) -> Pick | None:
             thinking={"type": "adaptive"},
             output_config={"effort": "medium"},
             messages=[{"role": "user", "content": prompt}],
-            output_format=ClipChoice,
+            output_format=ClipList,
         )
         if resp.stop_reason == "refusal" or resp.parsed_output is None:
             return None
-        choice = resp.parsed_output
+        choices = resp.parsed_output.clips
     except Exception as exc:  # no credentials, network, rate limit, ... → heuristic
         print(f"[clipper] Claude pick skipped ({type(exc).__name__}: {exc})")
         return None
-    # Snap to the nearest sentence start so the clip doesn't open mid-word.
-    snap = min((s.start for s in segments), key=lambda t: abs(t - choice.start_seconds))
-    start = snap if abs(snap - choice.start_seconds) < 2.0 else choice.start_seconds
-    s, e = _window_bounds(start, duration)
-    return Pick(s, e, choice.title, choice.reason, "claude")
+
+    def pct(v: int) -> int:
+        return int(max(0, min(100, v)))
+
+    seg_starts = [s.start for s in segments]
+    picks = []
+    for c in choices:
+        if not -1.0 <= c.start_seconds <= duration - CLIP_SECONDS + 2.0:
+            continue  # hallucinated timestamp: clamping would score the wrong moment
+        # Snap to the nearest sentence start so the clip doesn't open mid-word.
+        snap = min(seg_starts, key=lambda t: abs(t - c.start_seconds))
+        start = snap if abs(snap - c.start_seconds) < 2.0 else c.start_seconds
+        s, e = _window_bounds(start, duration)
+        picks.append(Pick(s, e, c.title, c.reason, "claude", pct(c.virality_score),
+                          pct(c.hook_score), pct(c.flow_score), pct(c.value_score)))
+    return _non_overlapping(picks, count) or None
 
 
 # ----------------------------------------------------------------------- reframing
@@ -452,9 +523,14 @@ def _ffmpeg_render(src: Path, pick: Pick, length: float, vf: str, out: Path,
 # ---------------------------------------------------------------------------- main
 
 
-def make_clip(src: Path, out: Path, workdir: Path, progress: Progress = _noop,
-              captions: bool = True) -> dict:
+def make_clips(src: Path, outdir: Path, workdir: Path, progress: Progress = _noop,
+               captions: bool = True, count: int = 5) -> dict:
+    """Cut up to `count` non-overlapping 30 s clips, best score first.
+
+    Writes clip_1.mp4 (highest score), clip_2.mp4, ... into `outdir`.
+    """
     workdir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
     progress("probe", 0.0)
     info = probe(src)
 
@@ -469,37 +545,45 @@ def make_clip(src: Path, out: Path, workdir: Path, progress: Progress = _noop,
         segments = transcribe(wav)
 
     progress("pick", 0.0)
-    pick = pick_with_claude(info.duration, segments) if segments else None
-    pick = pick or pick_heuristic(info.duration, loud, segments)
+    picks = pick_with_claude(info.duration, segments, count) if segments else None
+    picks = picks or pick_heuristic(info.duration, loud, segments, count)
+    picks.sort(key=lambda p: p.score, reverse=True)
 
-    progress("reframe", 0.0)
     landscape = info.width / info.height > OUT_W / OUT_H + 0.01
-    track = face_track(src, info, pick) if landscape else None
+    clips = []
+    for i, pick in enumerate(picks):
+        def clip_progress(_stage: str, pct: float, i: int = i) -> None:
+            progress("render", (i + pct) / len(picks))
 
-    cap_path = workdir / "captions.ass"
-    has_caps = bool(captions and segments and write_captions(segments, pick, cap_path))
+        clip_progress("render", 0.0)
+        track = face_track(src, info, pick) if landscape else None
+        cap_path = workdir / f"captions_{i + 1}.ass"
+        has_caps = bool(captions and segments and write_captions(segments, pick, cap_path))
+        out = outdir / f"clip_{i + 1}.mp4"
+        render(src, info, pick, track, cap_path if has_caps else None, out, clip_progress)
 
-    progress("render", 0.0)
-    render(src, info, pick, track, cap_path if has_caps else None, out, progress)
+        transcript = " ".join(w.text for s in (segments or []) for w in s.words
+                              if pick.start <= w.start < pick.end)
+        clips.append({
+            "file": out.name,
+            "start": round(pick.start, 2), "end": round(pick.end, 2),
+            "title": pick.title, "reason": pick.reason,
+            "score": pick.score, "hook": pick.hook, "flow": pick.flow, "value": pick.value,
+            "layout": "vertical-source" if not landscape else ("face-tracked" if track is not None else "fit"),
+            "captions": has_caps, "transcript": transcript,
+        })
     progress("done", 1.0)
-
-    transcript = " ".join(w.text for s in (segments or []) for w in s.words
-                          if pick.start <= w.start < pick.end)
-    return {
-        "start": round(pick.start, 2), "end": round(pick.end, 2),
-        "title": pick.title, "reason": pick.reason, "picked_by": pick.method,
-        "layout": "vertical-source" if not landscape else ("face-tracked" if track is not None else "fit"),
-        "captions": has_caps, "transcript": transcript,
-    }
+    return {"picked_by": picks[0].method, "duration": round(info.duration, 2), "clips": clips}
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="Cut the best 30-second vertical clip from a video.")
+    ap = argparse.ArgumentParser(description="Cut the best 30-second vertical clips from a video.")
     ap.add_argument("video", type=Path)
-    ap.add_argument("-o", "--out", type=Path, default=Path("clip.mp4"))
+    ap.add_argument("-o", "--out", type=Path, default=Path("clips"), help="output folder")
+    ap.add_argument("-n", "--count", type=int, default=5, help="max number of clips")
     ap.add_argument("--no-captions", action="store_true")
     args = ap.parse_args()
-    work = args.out.parent / f".{args.out.stem}_work"
+    work = args.out / ".work"
     last = {"stage": None}
 
     def show(stage: str, pct: float) -> None:
@@ -507,9 +591,13 @@ def main() -> None:
             print(f"-> {stage}")
             last["stage"] = stage
 
-    info = make_clip(args.video, args.out, work, show, captions=not args.no_captions)
+    result = make_clips(args.video, args.out, work, show, captions=not args.no_captions,
+                        count=max(1, args.count))
     shutil.rmtree(work, ignore_errors=True)
-    print(json.dumps(info, indent=2))
+    print(f"\n{len(result['clips'])} clips in {args.out}/ (scored by {result['picked_by']})")
+    for c in result["clips"]:
+        print(f"  {c['score']:3d}/100  {c['file']}  {c['start']:.0f}s-{c['end']:.0f}s  {c['title']}")
+    (args.out / "clips.json").write_text(json.dumps(result, indent=2))
 
 
 if __name__ == "__main__":

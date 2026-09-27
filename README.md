@@ -37,5 +37,5 @@ placement without a clear resets it.
 
 ## Also in this repo
 
-[`clipper/`](clipper/README.md) — an OpusClip-style tool that cuts the best 30-second
-vertical, captioned clip from any video.
+[`clipper/`](clipper/README.md) — an OpusClip-style tool that cuts a video's best 30-second
+moments into vertical, captioned clips, each rated out of 100.

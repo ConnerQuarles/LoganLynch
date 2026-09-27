@@ -1,4 +1,4 @@
-"""Tiny local web UI for the clipper: upload a video, get a 30 s vertical clip.
+"""Tiny local web UI for the clipper: upload a video, get ranked 30 s vertical clips.
 
     python -m clipper.app        # then open http://localhost:8000
 """
@@ -13,20 +13,21 @@ from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
 
-from .pipeline import make_clip
+from .pipeline import make_clips
 
 HERE = Path(__file__).parent
 WORK = Path(os.environ.get("CLIP_WORK_DIR", HERE / "work"))
-STAGES = ["probe", "audio", "transcribe", "pick", "reframe", "render", "done"]
+STAGES = ["probe", "audio", "transcribe", "pick", "render", "done"]
+MAX_CLIPS = 10
 
 app = Flask(__name__, static_folder=None)
 app.config["MAX_CONTENT_LENGTH"] = int(os.environ.get("CLIP_MAX_MB", "4096")) * 1024 * 1024
 jobs: dict[str, dict] = {}
-# One clip at a time: whisper + encoding already saturate the CPU.
+# One job at a time: whisper + encoding already saturate the CPU.
 render_lock = threading.Lock()
 
 
-def _run(job_id: str, src: Path, captions: bool) -> None:
+def _run(job_id: str, src: Path, captions: bool, count: int) -> None:
     job = jobs[job_id]
 
     def progress(stage: str, pct: float) -> None:
@@ -35,7 +36,8 @@ def _run(job_id: str, src: Path, captions: bool) -> None:
     with render_lock:
         job["state"] = "running"
         try:
-            job["result"] = make_clip(src, src.parent / "clip.mp4", src.parent, progress, captions)
+            job["result"] = make_clips(src, src.parent / "clips", src.parent, progress,
+                                       captions, count)
             job["state"] = "done"
         except Exception as exc:
             traceback.print_exc()
@@ -60,7 +62,11 @@ def create_clip():
     f.save(src)
     jobs[job_id] = {"state": "queued", "stage": "queued", "stage_pct": 0.0, "name": f.filename}
     captions = request.form.get("captions", "1") != "0"
-    threading.Thread(target=_run, args=(job_id, src, captions), daemon=True).start()
+    try:
+        count = max(1, min(MAX_CLIPS, int(request.form.get("count", "5"))))
+    except ValueError:
+        count = 5
+    threading.Thread(target=_run, args=(job_id, src, captions, count), daemon=True).start()
     return jsonify(id=job_id)
 
 
@@ -70,13 +76,15 @@ def clip_status(job_id: str):
     return jsonify(job | {"stages": STAGES})
 
 
-@app.get("/api/clip/<job_id>/video")
-def clip_video(job_id: str):
+@app.get("/api/clip/<job_id>/video/<int:n>")
+def clip_video(job_id: str, n: int):
     job = jobs.get(job_id) or abort(404)
     if job["state"] != "done":
         abort(409)
-    name = Path(job["name"]).stem + "_clip.mp4"
-    return send_file(WORK / job_id / "clip.mp4", mimetype="video/mp4",
+    if not 1 <= n <= len(job["result"]["clips"]):
+        abort(404)
+    name = f"{Path(job['name']).stem}_clip{n}.mp4"
+    return send_file(WORK / job_id / "clips" / f"clip_{n}.mp4", mimetype="video/mp4",
                      as_attachment=request.args.get("download") == "1", download_name=name)
 
 

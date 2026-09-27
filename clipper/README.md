@@ -1,7 +1,8 @@
 # Clipper
 
-An OpusClip-style tool: give it a long video, get back the best **30-second
-vertical (1080×1920) clip** with word-by-word captions burned in.
+An OpusClip-style tool: give it a long video, get back its best **30-second
+vertical (1080×1920) clips**, each **rated out of 100**, with word-by-word
+captions burned in.
 
 ## Run it
 
@@ -14,7 +15,8 @@ python -m clipper.app                   # open http://localhost:8000
 Or from the command line:
 
 ```bash
-python -m clipper.pipeline my_podcast.mp4 -o clip.mp4
+python -m clipper.pipeline my_podcast.mp4 -o clips/ -n 5
+# -> clips/clip_1.mp4 (highest score) ... plus clips/clips.json with scores
 ```
 
 The first run downloads the Whisper speech model (~500 MB for `small`).
@@ -22,11 +24,18 @@ The first run downloads the Whisper speech model (~500 MB for `small`).
 ## What it does
 
 1. **Transcribes** the audio with faster-whisper, keeping per-word timestamps.
-2. **Picks the 30 seconds.** With an Anthropic credential, Claude reads the
-   timestamped transcript and chooses the window with the strongest hook,
-   a self-contained thought and a payoff, snapped to a sentence start. Without
-   one (or if the call fails), a heuristic scores every window on loudness,
-   dynamics, dead air, words per second and whether it starts/ends on a sentence.
+2. **Picks and scores the clips** (default 5, max 10, never overlapping,
+   best first). Each gets a 0-100 **virality score** plus **Hook** (does the
+   first 3 s stop the scroll), **Flow** (clean start/end, no dead air, stands
+   alone) and **Value** (strength of the payoff).
+   - With an Anthropic credential, Claude reads the timestamped transcript,
+     chooses the moments and scores them on a calibrated scale (90+ rare,
+     70-89 strong, 50-69 usable). Timestamps it invents outside the video are
+     discarded; starts are snapped to sentence boundaries.
+   - Without one (or if the call fails), a heuristic scores every window on
+     loudness, dynamics, dead air, words per second and sentence alignment.
+     **These scores are percentiles within the video** — a 95 means "better
+     than almost every other window in this video", not "will go viral".
 3. **Reframes to 9:16.**
    - Landscape with a visible speaker → the crop follows the largest face,
      smoothed so it pans like a camera operator and cuts on speaker switches.
@@ -35,7 +44,8 @@ The first run downloads the Whisper speech model (~500 MB for `small`).
 4. **Captions** 3 words at a time, uppercase, with the spoken word highlighted
    yellow (ASS subtitles burned in by ffmpeg/libass).
 
-Videos 30 s or shorter are passed through whole.
+Videos 30 s or shorter come back as a single clip. A video can't yield more
+clips than it has non-overlapping 30 s windows.
 
 ## Settings (env vars)
 
@@ -51,7 +61,9 @@ Videos 30 s or shorter are passed through whole.
 
 ## Limits vs. the real OpusClip
 
-- One clip per video (OpusClip returns a ranked batch).
+- Clips are a fixed 30 s; OpusClip varies length to fit the moment.
+- Scores are Claude's judgment of the transcript, not a model trained on
+  real view counts — treat them as a ranking, not a prediction.
 - Face tracking uses OpenCV's Haar detector: fast and dependency-free, but it
   misses profile shots. Swap in MediaPipe/YuNet if that matters for your footage.
 - Jobs live in memory; restarting the server forgets them (files stay in `work/`).
