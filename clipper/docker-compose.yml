@@ -1,0 +1,43 @@
+# Standalone deploy: Clipper + Caddy (automatic HTTPS). Run from this folder:
+#   cp .env.example .env   # fill it in
+#   docker compose up -d --build
+# Already running Traefik (e.g. Hostinger's n8n template)? Use
+# docker-compose.traefik.yml instead — see DEPLOY.md.
+services:
+  clipper:
+    build:
+      context: ..
+      dockerfile: clipper/Dockerfile
+      args:
+        WHISPER_MODEL: ${CLIP_WHISPER_MODEL:-small}
+    restart: unless-stopped
+    environment:
+      CLIP_PASSWORD: ${CLIP_PASSWORD:?Set CLIP_PASSWORD in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLIP_KEEP_HOURS: ${CLIP_KEEP_HOURS:-24}
+      CLIP_MAX_MB: ${CLIP_MAX_MB:-4096}
+    volumes:
+      - clipper-data:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CLIP_DOMAIN: ${CLIP_DOMAIN:?Set CLIP_DOMAIN in .env}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+    depends_on:
+      - clipper
+
+volumes:
+  clipper-data:
+  caddy-data:

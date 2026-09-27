@@ -21,6 +21,11 @@ python -m clipper.pipeline my_podcast.mp4 -o clips/ -n 5
 
 The first run downloads the Whisper speech model (~500 MB for `small`).
 
+## Put it online
+
+See [DEPLOY.md](DEPLOY.md) for a password-protected HTTPS deploy on a
+Hostinger VPS (works alongside an existing n8n/Traefik setup).
+
 ## What it does
 
 1. **Transcribes** the audio with faster-whisper, keeping per-word timestamps.
@@ -57,6 +62,8 @@ clips than it has non-overlapping 30 s windows.
 | `CLIP_FONT` | `Arial` | Caption font (any installed font name) |
 | `CLIP_MAX_MB` | `4096` | Upload size limit |
 | `CLIP_WORK_DIR` | `clipper/work` | Where uploads and clips are stored |
+| `CLIP_PASSWORD` | unset | Site password (browser login, any username). Required by the Docker deploy |
+| `CLIP_KEEP_HOURS` | `24` | Delete uploads/clips older than this (`0` = keep forever) |
 | `PORT` | `8000` | Web UI port |
 
 ## Limits vs. the real OpusClip
@@ -67,4 +74,4 @@ clips than it has non-overlapping 30 s windows.
 - Face tracking uses OpenCV's Haar detector: fast and dependency-free, but it
   misses profile shots. Swap in MediaPipe/YuNet if that matters for your footage.
 - Jobs live in memory; restarting the server forgets them (files stay in `work/`).
-- The web UI has no auth — run it locally, don't expose it to the internet as-is.
+- Jobs run one at a time; a second upload waits in line.

@@ -1,0 +1,10 @@
+{$CLIP_DOMAIN} {
+	encode gzip
+	reverse_proxy clipper:8000 {
+		# Big uploads over slow connections.
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}

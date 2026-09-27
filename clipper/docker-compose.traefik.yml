@@ -1,0 +1,37 @@
+# For a VPS that already runs Traefik on ports 80/443 — e.g. Hostinger's
+# "n8n" VPS template. Clipper joins Traefik's network and gets its own
+# subdomain + HTTPS certificate; n8n is untouched. Run from this folder:
+#   docker compose -f docker-compose.traefik.yml up -d --build
+services:
+  clipper:
+    build:
+      context: ..
+      dockerfile: clipper/Dockerfile
+      args:
+        WHISPER_MODEL: ${CLIP_WHISPER_MODEL:-small}
+    restart: unless-stopped
+    environment:
+      CLIP_PASSWORD: ${CLIP_PASSWORD:?Set CLIP_PASSWORD in .env}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CLIP_KEEP_HOURS: ${CLIP_KEEP_HOURS:-24}
+      CLIP_MAX_MB: ${CLIP_MAX_MB:-4096}
+    volumes:
+      - clipper-data:/data
+    networks:
+      - traefik
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:?Set TRAEFIK_NETWORK in .env}
+      - traefik.http.routers.clipper.rule=Host(`${CLIP_DOMAIN:?Set CLIP_DOMAIN in .env}`)
+      - traefik.http.routers.clipper.entrypoints=${TRAEFIK_ENTRYPOINT:-websecure}
+      - traefik.http.routers.clipper.tls=true
+      - traefik.http.routers.clipper.tls.certresolver=${TRAEFIK_CERTRESOLVER:-mytlschallenge}
+      - traefik.http.services.clipper.loadbalancer.server.port=8000
+
+networks:
+  traefik:
+    name: ${TRAEFIK_NETWORK}
+    external: true
+
+volumes:
+  clipper-data:
