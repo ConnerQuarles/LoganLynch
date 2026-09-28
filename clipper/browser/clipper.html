@@ -1,7 +1,7 @@
 <title>Clipper</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600&family=JetBrains+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
 <style>
 /* Single dark look on purpose: it's an editing bay, and video reads best on dark. */
 :root{
@@ -92,6 +92,19 @@ input[type=range]{accent-color:var(--tape);width:100%}
 .note{font-size:12px;color:var(--dim);margin:0}
 .sample-tag{display:inline-block;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--tape);
   border:1px solid var(--tape);border-radius:99px;padding:1px 8px;margin-left:8px;vertical-align:middle}
+.resbar{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.resbar .btn{flex:none}
+.nudge{position:absolute;bottom:10px;right:10px;display:flex;gap:4px}
+.nudge button{background:#000b;color:var(--ink);border:0;border-radius:6px;padding:2px 7px;font:500 12px var(--f-mono)}
+.nudge button:disabled{opacity:.4}
+.edit{font-size:13px}
+.edit summary{cursor:pointer;color:var(--tape);font-weight:600}
+.edit label{display:grid;gap:4px;margin-top:8px;color:var(--dim)}
+.edit input,.edit textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:7px 9px;color:var(--ink);font:inherit;font-size:13px}
+.edit textarea{min-height:92px;resize:vertical}
+.post{background:var(--panel-2);border-radius:9px;padding:9px 11px;font-size:13px;display:grid;gap:6px}
+.post p{margin:0;color:#cfd5de;white-space:pre-wrap}
+.post button{justify-self:start;background:none;border:1px solid var(--line);border-radius:7px;padding:3px 10px;font-size:12px}
 .method{color:var(--dim);font-size:13px;margin:0}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -125,6 +138,18 @@ input[type=range]{accent-color:var(--tape);width:100%}
         </div>
       </div>
       <label class="check"><input type="checkbox" id="captions" checked> Captions (speech-to-text runs in your browser)</label>
+      <div class="field" id="capFields"><span>Caption style</span>
+        <div class="seg" id="capStyle" role="group" aria-label="Caption style">
+          <button type="button" data-v="pop" aria-pressed="true">Pop</button>
+          <button type="button" data-v="box" aria-pressed="false">Box</button>
+          <button type="button" data-v="clean" aria-pressed="false">Clean</button>
+        </div>
+        <div class="seg" id="capPos" role="group" aria-label="Caption position">
+          <button type="button" data-v="low" aria-pressed="true">Lower</button>
+          <button type="button" data-v="mid" aria-pressed="false">Middle</button>
+        </div>
+      </div>
+      <label class="check"><input type="checkbox" id="hookTitle" checked> Hook title on screen for the first 3 seconds</label>
       <div class="field" id="focusField" hidden><span>Crop focus <span class="mono" id="focusVal">50%</span></span>
         <input type="range" id="focus" min="0" max="100" value="50" aria-label="Crop focus, left to right">
       </div>
@@ -140,7 +165,8 @@ input[type=range]{accent-color:var(--tape);width:100%}
     <canvas id="wave" height="92"></canvas>
   </section>
 
-  <p class="method" id="method"></p>
+  <div class="resbar"><p class="method" id="method"></p>
+    <button class="btn primary" type="button" id="renderAll" hidden>Render all clips</button></div>
   <section class="clips" id="clips" aria-live="polite"></section>
 </main>
 
@@ -150,7 +176,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 const CLIP = 30, HOP = 0.5, OUT_W = 720, OUT_H = 1280;
 const $ = id => document.getElementById(id);
 const state = { file: null, url: null, duration: 0, loud: null, clips: [], vw: 16, vh: 9,
-  count: 5, layout: "fit", focus: 0.5, captions: true, busy: false, example: true, pcm: null };
+  count: 5, layout: "fit", focus: 0.5, captions: true, capStyle: "pop", capPos: "low", hookTitle: true, busy: false, example: true, pcm: null, video: null };
 const cap = { sample: null, downloads: null };
 
 // ---- capabilities: render without them, light up when they resolve --------------
@@ -171,6 +197,7 @@ function segment(id, key, cast = v => v){
     const b = e.target.closest("button"); if (!b) return;
     for (const x of $(id).children) x.setAttribute("aria-pressed", String(x === b));
     state[key] = cast(b.dataset.v);
+    if (key === "capStyle" || key === "capPos" || key === "layout") staleAll();
     if (key === "layout") $("focusField").hidden = state.layout !== "fill";
     if (key === "layout" || key === "focus") drawAllPosters();
   });
@@ -186,7 +213,11 @@ const drop = $("drop");
 drop.addEventListener("drop", e => e.dataTransfer.files[0] && pickFile(e.dataTransfer.files[0]));
 $("file").addEventListener("change", e => e.target.files[0] && pickFile(e.target.files[0]));
 $("go").addEventListener("click", () => run());
-$("captions").addEventListener("change", e => { state.captions = e.target.checked; });
+$("captions").addEventListener("change", e => { state.captions = e.target.checked; $("capFields").hidden = !state.captions; });
+$("hookTitle").addEventListener("change", e => { state.hookTitle = e.target.checked; staleAll(); });
+segment("capStyle", "capStyle");
+segment("capPos", "capPos");
+$("renderAll").addEventListener("click", renderAll);
 
 function pickFile(f){
   if (state.busy) return;
@@ -282,9 +313,20 @@ async function captionClips(list){
     const res = await transcribe(state.pcm.slice(a, b));
     first = false; asr.onProgress = null;
     setStatus(`Transcribing moment ${Math.min(i + 2, list.length)} of ${list.length}…`);
-    c.words = res.words.filter(w => w.start < c.end - c.start);
+    c.words = mergeFragments(res.words.filter(w => w.start < c.end - c.start));
     c.transcript = res.text;
   }
+}
+
+// Whisper sometimes splits a word ("near" + "-outer", "it" + "'s"): glue those back.
+function mergeFragments(words){
+  const out = [];
+  for (const w of words){
+    const prev = out[out.length - 1];
+    if (prev && /^[-'’.,!?;:%]/.test(w.text)) { prev.text += w.text; prev.end = w.end; }
+    else out.push({ ...w });
+  }
+  return out;
 }
 
 // ---- scoring (mirrors the Python heuristic) --------------------------------------
@@ -367,10 +409,10 @@ Rate each candidate 0-100 on:
 - value: is there a payoff (a punchline, insight, reveal, strong emotion or striking visual)?
 - score: overall likelihood it performs as a short.
 Calibrate honestly and use the whole range: 90+ is rare and exceptional, 70-89 strong, 50-69 usable, below 50 weak. Talking-head footage can still score well when the audio energy suggests an animated delivery.
-Give each a punchy title of at most 7 words and one sentence explaining the score.
+Give each a punchy title of at most 7 words (it is shown on screen as the hook, so make it make people stay), one sentence explaining the score, and a ready-to-post social caption: one or two short sentences in a casual voice, then 3 to 5 relevant hashtags.
 
 Reply with only a JSON array, one object per candidate, in order:
-[{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"..."}]`;
+[{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"...","post":"... #tag #tag #tag"}]`;
   setStatus("Claude is rating the moments… (this can take up to a minute)");
   const out = await cap.sample.json(prompt, canSee ? { images } : {});
   if (!Array.isArray(out)) return null;
@@ -380,7 +422,7 @@ Reply with only a JSON array, one object per candidate, in order:
     const c = list[Number(r?.n) - 1];
     if (!c || rated.includes(c)) continue;
     Object.assign(c, { title: String(r.title || "").slice(0, 80) || "Highlight",
-      reason: String(r.reason || "").slice(0, 300), hook: clamp(r.hook), flow: clamp(r.flow),
+      reason: String(r.reason || "").slice(0, 300), post: String(r.post || "").slice(0, 600), hook: clamp(r.hook), flow: clamp(r.flow),
       value: clamp(r.value), score: clamp(r.score), by: "claude" });
     rated.push(c);
   }
@@ -395,6 +437,7 @@ async function run(){
   try {
     setStatus("Reading video…");
     const v = await loadVideo(state.url);
+    state.video = v;
     state.duration = v.duration; state.vw = v.videoWidth || 16; state.vh = v.videoHeight || 9;
     if (!isFinite(state.duration) || state.duration <= 0) throw new Error("Couldn't read the video's length.");
 
@@ -476,22 +519,59 @@ function drawCaptions(g, words, t, W, H){
   if (idx < 0 || t - words[idx].end > 0.7) return;           // before speech, or a pause: no caption
   const g0 = Math.floor(idx / 3) * 3, group = words.slice(g0, g0 + 3);
   const active = t <= words[idx].end + 0.15 ? idx - g0 : -1;
-  const texts = group.map(w => w.text.toUpperCase().replace(/^[\s"']+|[\s"']+$/g, ""));
-  let px = Math.round(W * 0.085);
-  g.font = CAPTION_FONT(px);
-  const space = () => g.measureText(" ").width;
-  let total = texts.reduce((a, s) => a + g.measureText(s).width, 0) + space() * (texts.length - 1);
-  if (total > W * 0.88){ px = Math.floor(px * W * 0.88 / total); g.font = CAPTION_FONT(px); total = texts.reduce((a, s) => a + g.measureText(s).width, 0) + space() * (texts.length - 1); }
-  let x = (W - total) / 2; const y = H * 0.72;
+  const style = state.capStyle, upper = style !== "clean";
+  const texts = group.map(w => { const x = w.text.replace(/^[\s"']+|[\s"']+$/g, ""); return upper ? x.toUpperCase() : x; });
+  let px = Math.round(W * (style === "clean" ? 0.07 : 0.085));
+  const font = n => style === "clean" ? `700 ${n}px Figtree, Arial, sans-serif` : CAPTION_FONT(n);
+  g.font = font(px);
+  const space = () => g.measureText(" ").width * (style === "box" ? 1.6 : 1);
+  const width = () => texts.reduce((a, s) => a + g.measureText(s).width, 0) + space() * (texts.length - 1);
+  let total = width();
+  if (total > W * 0.88){ px = Math.floor(px * W * 0.88 / total); g.font = font(px); total = width(); }
+  let x = (W - total) / 2; const y = H * (state.capPos === "mid" ? 0.5 : 0.72);
   g.save();
   g.textBaseline = "middle"; g.lineJoin = "round"; g.miterLimit = 2;
   texts.forEach((s, k) => {
-    g.lineWidth = px * 0.2; g.strokeStyle = "#000"; g.strokeText(s, x, y);
-    g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.06;
-    g.fillStyle = k === active ? "#ffe11a" : "#ffffff"; g.fillText(s, x, y);
-    g.shadowColor = "transparent";
-    x += g.measureText(s).width + space();
+    const w = g.measureText(s).width;
+    if (style === "box"){
+      if (k === active){ g.fillStyle = "#ffe11a"; roundRect(g, x - px * 0.22, y - px * 0.62, w + px * 0.44, px * 1.2, px * 0.22); g.fill(); }
+      else { g.lineWidth = px * 0.16; g.strokeStyle = "#000"; g.strokeText(s, x, y); }
+      g.fillStyle = k === active ? "#111" : "#fff"; g.fillText(s, x, y);
+    } else if (style === "clean"){
+      g.shadowColor = "rgba(0,0,0,.75)"; g.shadowBlur = px * 0.35; g.shadowOffsetY = px * 0.05;
+      g.fillStyle = k === active ? "#fff" : "rgba(255,255,255,.82)"; g.fillText(s, x, y);
+      g.shadowColor = "transparent";
+    } else {
+      g.lineWidth = px * 0.2; g.strokeStyle = "#000"; g.strokeText(s, x, y);
+      g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.06;
+      g.fillStyle = k === active ? "#ffe11a" : "#ffffff"; g.fillText(s, x, y);
+      g.shadowColor = "transparent";
+    }
+    x += w + space();
   });
+  g.restore();
+}
+function roundRect(g, x, y, w, h, r){
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+// The clip's title as an on-screen hook for the first 3 s, fading out.
+function drawHookTitle(g, title, t, W, H){
+  if (!title || t > 3) return;
+  const alpha = t < 2.6 ? 1 : (3 - t) / 0.4;
+  let px = Math.round(W * 0.062); g.font = CAPTION_FONT(px);
+  const maxW = W * 0.78, words = title.split(/\s+/), lines = [];
+  for (const w of words){
+    const cur = lines[lines.length - 1];
+    if (cur && g.measureText(cur + " " + w).width <= maxW) lines[lines.length - 1] = cur + " " + w; else lines.push(w);
+  }
+  const shown = lines.slice(0, 3), lh = px * 1.18;
+  const boxW = Math.max(...shown.map(l => g.measureText(l).width)) + px * 1.2, boxH = lh * shown.length + px * 0.7;
+  const bx = (W - boxW) / 2, by = H * 0.1;
+  g.save(); g.globalAlpha = alpha;
+  g.fillStyle = "#fff"; roundRect(g, bx, by, boxW, boxH, px * 0.35); g.fill();
+  g.fillStyle = "#111"; g.textAlign = "center"; g.textBaseline = "middle";
+  shown.forEach((l, k) => g.fillText(l, W / 2, by + px * 0.35 + lh * (k + 0.5)));
   g.restore();
 }
 
@@ -556,13 +636,18 @@ function renderCards(){
     const el = document.createElement("article"); el.className = "clip";
     el.style.setProperty("--c", tier(c.score));
     el.innerHTML = `
-      <div class="frame"><span class="rank">#${i + 1}</span><span class="tc mono">${fmt(c.start)} – ${fmt(c.end)}</span></div>
+      <div class="frame"><span class="rank">#${i + 1}</span><span class="tc mono">${fmt(c.start)} – ${fmt(c.end)}</span>
+        ${state.example ? "" : `<span class="nudge"><button type="button" data-d="-5" aria-label="Start 5 seconds earlier">◀ 5s</button><button type="button" data-d="5" aria-label="Start 5 seconds later">5s ▶</button></span>`}</div>
       <div class="body">
         <div class="head"><div class="ring" style="--s:${c.score}"><b>${c.score}</b></div>
           <div><h3></h3><small>Virality score / 100</small></div></div>
         <div class="bars">${bar("Hook", c.hook)}${bar("Flow", c.flow)}${bar("Value", c.value)}</div>
         <p class="why"></p>
         <p class="quote" hidden></p>
+        <div class="post" hidden><p></p><button type="button">Copy post</button></div>
+        ${state.example ? "" : `<details class="edit"><summary>Edit title &amp; captions</summary>
+          <label>Hook title<input type="text" class="e-title" maxlength="80"></label>
+          <label>Captions (fix any misheard words; timing is kept)<textarea class="e-words"></textarea></label></details>`}
         <div class="prog" hidden><i></i></div>
         <p class="note" hidden></p>
         <div class="actions"><button class="btn primary" type="button">${state.example ? "Example clip" : "Render clip"}</button></div>
@@ -570,6 +655,21 @@ function renderCards(){
     el.querySelector("h3").textContent = c.title;
     el.querySelector(".why").textContent = c.reason;
     if (c.transcript){ const q = el.querySelector(".quote"); q.hidden = false; q.textContent = `“${c.transcript}”`; }
+    if (c.post){
+      const box = el.querySelector(".post"); box.hidden = false; box.querySelector("p").textContent = c.post;
+      box.querySelector("button").addEventListener("click", async e => {
+        try { await navigator.clipboard.writeText(c.post); e.target.textContent = "Copied"; }
+        catch { const r = document.createRange(); r.selectNodeContents(box.querySelector("p")); getSelection().removeAllRanges(); getSelection().addRange(r); e.target.textContent = "Selected — copy it"; }
+      });
+    }
+    const et = el.querySelector(".e-title"), ew = el.querySelector(".e-words");
+    if (et){
+      et.value = c.title; ew.value = (c.words || []).map(w => w.text).join(" ");
+      ew.disabled = !c.words?.length; if (ew.disabled) ew.placeholder = "No captions for this clip.";
+      et.addEventListener("change", () => { c.title = et.value.trim() || c.title; c.titleEdited = true; el.querySelector("h3").textContent = c.title; markStale(c); });
+      ew.addEventListener("change", () => { retime(c, ew.value); const q = el.querySelector(".quote"); q.hidden = !c.transcript; q.textContent = `“${c.transcript}”`; markStale(c); });
+    }
+    for (const b of el.querySelectorAll(".nudge button")) b.addEventListener("click", () => nudge(c, Number(b.dataset.d), el));
     const frame = el.querySelector(".frame");
     if (c.poster) frame.prepend(c.poster);
     const btn = el.querySelector(".btn");
@@ -577,6 +677,64 @@ function renderCards(){
     else btn.addEventListener("click", () => c.blob ? saveClip(c, i, el) : renderClip(c, i, el));
     c.el = el; root.append(el);
   });
+  $("renderAll").hidden = state.example || !state.clips.length;
+}
+
+// Edited caption text keeps the original timing: each new word takes the time at the
+// same relative position (by characters) through the original words.
+function retime(c, text){
+  const toks = text.trim().split(/\s+/).filter(Boolean), old = c.words || [];
+  if (!toks.length || !old.length){ c.words = []; c.transcript = ""; return; }
+  if (toks.length === old.length){ c.words = old.map((w, k) => ({ ...w, text: toks[k] })); c.transcript = toks.join(" "); return; }
+  const oldLen = old.reduce((a, w) => a + w.text.length + 1, 0), newLen = toks.reduce((a, t) => a + t.length + 1, 0);
+  const timeAt = f => {            // f in [0,1]: position through the old words by characters
+    let acc = 0;
+    for (const w of old){
+      const n = (w.text.length + 1) / oldLen;
+      if (f <= acc + n) return w.start + (w.end - w.start) * ((f - acc) / n);
+      acc += n;
+    }
+    return old[old.length - 1].end;
+  };
+  let pos = 0;
+  c.words = toks.map(t => { const s = timeAt(pos / newLen); pos += t.length + 1; return { text: t, start: s, end: timeAt(pos / newLen) }; });
+  c.transcript = toks.join(" ");
+}
+function markStale(c){
+  if (!c.blob || !c.el) return;
+  c.blob = null; const btn = c.el.querySelector(".btn");
+  btn.textContent = "Render again"; btn.disabled = false;
+  note(c.el, "Changed since the last render.");
+}
+function staleAll(){ for (const c of state.clips) markStale(c); }
+async function nudge(c, d, el){
+  if (state.busy || rendering) return;
+  const len = c.end - c.start, start = Math.max(0, Math.min(state.duration - len, c.start + d));
+  if (start === c.start || !state.video) return;
+  state.busy = true;
+  const btns = el.querySelectorAll(".nudge button, .btn"); btns.forEach(b => b.disabled = true);
+  try {
+    c.start = start; c.end = start + len;
+    el.querySelector(".tc").textContent = `${fmt(c.start)} – ${fmt(c.end)}`;
+    await seek(state.video, c.start + Math.min(3, len / 2));
+    c.posterSrc = snapshot(state.video); drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480);
+    const fr = el.querySelector(".frame"); fr.querySelectorAll("video, canvas").forEach(n => n.remove()); fr.prepend(c.poster);
+    if (state.captions && state.pcm){ note(el, "Re-transcribing…"); await captionClips([c]); }
+    const ew = el.querySelector(".e-words"); if (ew){ ew.value = (c.words || []).map(w => w.text).join(" "); ew.disabled = !c.words?.length; }
+    const q = el.querySelector(".quote"); q.hidden = !c.transcript; q.textContent = `“${c.transcript || ""}”`;
+    c.blob = null; el.querySelector(".btn").textContent = "Render clip";
+    note(el, `Moved to ${fmt(c.start)}. Scores are for the original timing.`);
+    drawTimeline();
+    setStatus(`Found ${state.clips.length} clip${state.clips.length === 1 ? "" : "s"}. Render any of them below.`, "idle");
+  } catch (e) { note(el, "Couldn't move this clip: " + (e.message || e)); }
+  finally { btns.forEach(b => b.disabled = false); state.busy = false; }
+}
+async function renderAll(){
+  const btn = $("renderAll"); btn.disabled = true;
+  for (const [i, c] of state.clips.entries()){
+    if (!c.blob && c.el) await renderClip(c, i, c.el);
+  }
+  btn.disabled = false;
 }
 const bar = (label, v) => `<div class="bar">${label}<i style="--v:${v}"></i><em class="mono">${v}</em></div>`;
 
@@ -613,9 +771,10 @@ async function renderClip(c, i, el){
     const stopped = new Promise(res => rec.onstop = res);
 
     const frameEl = el.querySelector(".frame"), live = cv;
-    if (c.poster?.isConnected) c.poster.replaceWith(live); else frameEl.prepend(live);
+    frameEl.querySelectorAll("video, canvas").forEach(n => n.remove());   // previous render or poster
+    frameEl.prepend(live);
     const withCaps = state.captions && c.words?.length > 0;
-    if (withCaps) await document.fonts?.load?.(CAPTION_FONT(64)).catch(() => {});
+    await Promise.all([CAPTION_FONT(64), "700 48px Figtree"].map(f => document.fonts?.load?.(f).catch(() => {})));
     rec.start(250); await v.play();
     const len = c.end - c.start;
     let watchdog, onVis;
@@ -625,6 +784,7 @@ async function renderClip(c, i, el){
       const draw = () => {
         drawFrame(g, v, OUT_W, OUT_H);
         if (withCaps) drawCaptions(g, c.words, v.currentTime - c.start, OUT_W, OUT_H);
+        if (state.hookTitle && (c.by === "claude" || c.titleEdited)) drawHookTitle(g, c.title, v.currentTime - c.start, OUT_W, OUT_H);
         lastDraw = performance.now();
         fill.style.width = `${Math.min(100, (v.currentTime - c.start) / len * 100)}%`;
       };
