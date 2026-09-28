@@ -144,6 +144,12 @@ input[type=range]{accent-color:var(--tape);width:100%}
           <button type="button" data-v="box" aria-pressed="false">Box</button>
           <button type="button" data-v="clean" aria-pressed="false">Clean</button>
         </div>
+        <div class="seg" id="capWords" role="group" aria-label="Words on screen at a time">
+          <button type="button" data-v="1" aria-pressed="false">1 word</button>
+          <button type="button" data-v="2" aria-pressed="false">2</button>
+          <button type="button" data-v="3" aria-pressed="true">3</button>
+          <button type="button" data-v="4" aria-pressed="false">4</button>
+        </div>
         <div class="seg" id="capPos" role="group" aria-label="Caption position">
           <button type="button" data-v="low" aria-pressed="true">Lower</button>
           <button type="button" data-v="mid" aria-pressed="false">Middle</button>
@@ -176,7 +182,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 const CLIP = 30, HOP = 0.5, OUT_W = 720, OUT_H = 1280;
 const $ = id => document.getElementById(id);
 const state = { file: null, url: null, duration: 0, loud: null, clips: [], vw: 16, vh: 9,
-  count: 5, layout: "fit", focus: 0.5, captions: true, capStyle: "pop", capPos: "low", hookTitle: true, busy: false, example: true, pcm: null, video: null };
+  count: 5, layout: "fit", focus: 0.5, captions: true, capStyle: "pop", capPos: "low", capWords: 3, hookTitle: true, busy: false, example: true, pcm: null, video: null };
 const cap = { sample: null, downloads: null };
 
 // ---- capabilities: render without them, light up when they resolve --------------
@@ -197,7 +203,7 @@ function segment(id, key, cast = v => v){
     const b = e.target.closest("button"); if (!b) return;
     for (const x of $(id).children) x.setAttribute("aria-pressed", String(x === b));
     state[key] = cast(b.dataset.v);
-    if (key === "capStyle" || key === "capPos" || key === "layout") staleAll();
+    if (key === "capStyle" || key === "capPos" || key === "capWords" || key === "layout") staleAll();
     if (key === "layout") $("focusField").hidden = state.layout !== "fill";
     if (key === "layout" || key === "focus") drawAllPosters();
   });
@@ -217,6 +223,7 @@ $("captions").addEventListener("change", e => { state.captions = e.target.checke
 $("hookTitle").addEventListener("change", e => { state.hookTitle = e.target.checked; staleAll(); });
 segment("capStyle", "capStyle");
 segment("capPos", "capPos");
+segment("capWords", "capWords", Number);
 $("renderAll").addEventListener("click", renderAll);
 
 function pickFile(f){
@@ -517,11 +524,13 @@ function drawCaptions(g, words, t, W, H){
   let idx = -1;
   for (let k = 0; k < words.length && words[k].start <= t + 0.02; k++) idx = k;
   if (idx < 0 || t - words[idx].end > 0.7) return;           // before speech, or a pause: no caption
-  const g0 = Math.floor(idx / 3) * 3, group = words.slice(g0, g0 + 3);
+  const n = state.capWords || 3;
+  const g0 = Math.floor(idx / n) * n, group = words.slice(g0, g0 + n);
   const active = t <= words[idx].end + 0.15 ? idx - g0 : -1;
   const style = state.capStyle, upper = style !== "clean";
   const texts = group.map(w => { const x = w.text.replace(/^[\s"']+|[\s"']+$/g, ""); return upper ? x.toUpperCase() : x; });
-  let px = Math.round(W * (style === "clean" ? 0.07 : 0.085));
+  const boost = { 1: 1.35, 2: 1.15 }[n] || 1;
+  let px = Math.round(W * (style === "clean" ? 0.07 : 0.085) * boost);
   const font = n => style === "clean" ? `700 ${n}px Figtree, Arial, sans-serif` : CAPTION_FONT(n);
   g.font = font(px);
   const space = () => g.measureText(" ").width * (style === "box" ? 1.6 : 1);
