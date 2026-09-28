@@ -391,7 +391,9 @@ def pick_with_claude(duration: float, segments: list[Segment], count: int) -> li
         f"<transcript>\n{lines}\n</transcript>"
     )
     try:
-        client = anthropic.Anthropic()
+        # Org-level keys need the workspace named explicitly; workspace keys don't.
+        ws = os.environ.get("ANTHROPIC_WORKSPACE_ID")
+        client = anthropic.Anthropic(default_headers={"anthropic-workspace-id": ws} if ws else None)
         resp = client.messages.parse(
             model=os.environ.get("CLIP_CLAUDE_MODEL", "claude-opus-5"),
             max_tokens=16000,

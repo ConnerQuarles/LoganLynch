@@ -1,0 +1,65 @@
+# End-to-end check of the link pipeline on GitHub's runners: makes a talking
+# test video with espeak-ng, serves it locally, and runs it through the same
+# job code the page uses. Publishes the prerelease "clips-selftest-<run>".
+name: clipper-selftest
+on:
+  push:
+    branches: [claude/opusclip-replica-30sec-ylkjf0]
+    paths: [".github/workflows/clipper-selftest.yml", "clipper/pipeline.py", "clipper/gh_job.py"]
+
+permissions:
+  contents: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11", cache: pip, cache-dependency-path: clipper/requirements.txt }
+      - uses: denoland/setup-deno@v2
+        with: { deno-version: v2.x }
+      - uses: actions/cache@v4
+        with: { path: ~/.cache/huggingface, key: whisper-small-v1 }
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq espeak-ng ffmpeg
+      - run: pip install -r clipper/requirements.txt
+
+      - name: Make a 90 s talking test video
+        run: |
+          mkdir -p /tmp/serve && cd /tmp/serve
+          espeak-ng -s 150 -w a.wav "Welcome back to the show. Today we are talking about the one habit that changed everything for me. It sounds simple, but most people get it completely wrong."
+          espeak-ng -s 165 -a 200 -w b.wav "Here is the secret nobody tells you. Stop waiting for motivation. Motivation shows up after you start, not before. I went from zero to running a marathon in eight months by doing ten minutes a day. Ten minutes. That is it. And the crazy part is that after the first week, I did not even need to think about it anymore."
+          espeak-ng -s 140 -w c.wav "Anyway, thanks for listening, and remember to subscribe for more episodes like this one. See you next week."
+          ffmpeg -v error -f lavfi -t 12 -i anullsrc=r=22050:cl=mono -y gap.wav
+          ffmpeg -v error -i gap.wav -i a.wav -i gap.wav -i b.wav -i gap.wav -i c.wav -i gap.wav \
+            -filter_complex "concat=n=7:v=0:a=1" -y speech.wav
+          ffmpeg -v error -f lavfi -i testsrc2=s=1280x720:r=30 -i speech.wav -shortest \
+            -c:v libx264 -preset veryfast -c:a aac -y talk.mp4
+          ffmpeg -hide_banner -i talk.mp4 2>&1 | grep Duration
+
+      - name: Run it through the link pipeline
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+          CLIP_ALLOW_PRIVATE_URLS: "1"
+          CLIP_WHISPER_MODEL: small
+        run: |
+          (cd /tmp/serve && python -m http.server 8765 >/dev/null 2>&1 &)
+          sleep 1
+          REQ="$RUNNER_TEMP/selftest-${GITHUB_RUN_ID}.json"
+          echo '{"url": "http://127.0.0.1:8765/talk.mp4", "count": 2, "captions": true}' > "$REQ"
+          python -m clipper.gh_job start "$REQ"
+          python -m clipper.gh_job run "$REQ"
+
+      - name: Check the clips are exactly 30 s with no frozen tail
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          gh release download "clips-selftest-${GITHUB_RUN_ID}" -p "clip_*.mp4" -D /tmp/out
+          for f in /tmp/out/*.mp4; do
+            d=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$f")
+            fr=$(ffmpeg -hide_banner -i "$f" -vf freezedetect=n=0.001:d=2 -map 0:v -f null - 2>&1 | grep -c freeze_start || true)
+            echo "$f duration=$d freezes=$fr"
+            python3 -c "import sys; d=float('$d'); sys.exit(0 if 29.5 <= d <= 30.5 else 1)"
+          done

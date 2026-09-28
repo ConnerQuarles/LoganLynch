@@ -492,7 +492,7 @@ async function renderClip(c, i, el){
   rendering = true;
   const btn = el.querySelector(".btn"), prog = el.querySelector(".prog"), fill = prog.firstElementChild;
   btn.disabled = true; btn.textContent = "Rendering…"; prog.hidden = false;
-  note(el, "Keep this tab open and visible. Rendering runs in real time.");
+  note(el, "Rendering runs in real time. If you leave this page it pauses, and picks up when you come back.");
   let actx;
   try {
     const v = document.createElement("video");
@@ -515,17 +515,40 @@ async function renderClip(c, i, el){
     if (c.poster?.isConnected) c.poster.replaceWith(live); else frameEl.prepend(live);
     rec.start(250); await v.play();
     const len = c.end - c.start;
+    let watchdog, onVis;
     await new Promise(res => {
-      v.onended = res;
-      const tick = () => {
-        drawFrame(g, v, OUT_W, OUT_H);
+      let done = false, lastDraw = 0;
+      const finish = () => { if (!done){ done = true; res(); } };
+      const draw = () => {
+        drawFrame(g, v, OUT_W, OUT_H); lastDraw = performance.now();
         fill.style.width = `${Math.min(100, (v.currentTime - c.start) / len * 100)}%`;
-        if (v.currentTime >= c.end || v.ended) return res();
+      };
+      const tick = () => {
+        if (done) return;
+        draw();
+        if (v.currentTime >= c.end || v.ended) return finish();
         v.requestVideoFrameCallback ? v.requestVideoFrameCallback(tick) : requestAnimationFrame(tick);
       };
+      // Browsers stop frame callbacks when the page is out of view, while the recorder
+      // keeps going — that recorded frozen frames past the 30 s. So: pause both while
+      // hidden, and check the end on a timer too, not only on frame callbacks.
+      onVis = () => {
+        if (done) return;
+        if (document.hidden){ v.pause(); if (rec.state === "recording") rec.pause(); }
+        else { if (rec.state === "paused") rec.resume(); v.play().then(tick, () => {}); }
+      };
+      document.addEventListener("visibilitychange", onVis);
+      v.addEventListener("timeupdate", () => { if (v.currentTime >= c.end) finish(); });
+      v.onended = finish;
+      watchdog = setInterval(() => {
+        if (done || v.paused) return;
+        if (v.currentTime >= c.end) return finish();
+        if (performance.now() - lastDraw > 400) draw();  // frame callbacks stalled: keep the canvas moving
+      }, 100);
       tick();
     });
-    v.pause(); rec.stop(); await stopped;
+    clearInterval(watchdog); document.removeEventListener("visibilitychange", onVis);
+    v.pause(); if (rec.state !== "inactive") rec.stop(); await stopped;
     c.blob = new Blob(chunks, { type: rec.mimeType || mime || "video/webm" });
     c.ext = /mp4/.test(c.blob.type) ? "mp4" : "webm";
     const out = document.createElement("video");

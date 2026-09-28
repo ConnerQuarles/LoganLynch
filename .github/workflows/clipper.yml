@@ -1,0 +1,81 @@
+# Clipper link jobs: the web page commits clipper/jobs/requests/<id>.json to this
+# branch; this downloads the video, cuts the clips and publishes them as the
+# prerelease "clips-<id>" that the page polls.
+name: clipper
+on:
+  push:
+    branches: [claude/opusclip-replica-30sec-ylkjf0]
+    paths: ["clipper/jobs/requests/**"]
+
+permissions:
+  contents: write
+
+jobs:
+  clip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+
+      - name: Find new requests
+        id: req
+        env: { BEFORE: "${{ github.event.before }}" }
+        run: |
+          if ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then BEFORE="${GITHUB_SHA}~1"; fi
+          FILES=$(git diff --name-only --diff-filter=A "$BEFORE" "$GITHUB_SHA" -- clipper/jobs/requests/ \
+            | grep -E '^clipper/jobs/requests/[a-z0-9][a-z0-9-]{5,40}\.json$' | tr '\n' ' ' || true)
+          echo "Requests: ${FILES:-none}"
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+
+      - name: Tell the page the job started
+        if: steps.req.outputs.files != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FILES: ${{ steps.req.outputs.files }}
+        run: python3 -m clipper.gh_job start $FILES
+
+      - uses: actions/setup-python@v5
+        if: steps.req.outputs.files != ''
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: clipper/requirements.txt
+
+      - uses: denoland/setup-deno@v2   # yt-dlp needs a JS runtime for YouTube
+        if: steps.req.outputs.files != ''
+        with: { deno-version: v2.x }
+
+      - uses: actions/cache@v4         # keep the Whisper model between runs
+        if: steps.req.outputs.files != ''
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-v1
+
+      - name: Install
+        if: steps.req.outputs.files != ''
+        run: pip install -r clipper/requirements.txt
+
+      - name: Make clips
+        if: steps.req.outputs.files != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_WORKSPACE_ID: ${{ secrets.ANTHROPIC_WORKSPACE_ID }}
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+          FILES: ${{ steps.req.outputs.files }}
+          CLIP_WHISPER_MODEL: small
+          CLIP_MAX_MINUTES: "90"
+        run: |
+          if [ -n "$YT_COOKIES" ]; then
+            printf '%s\n' "$YT_COOKIES" > "$RUNNER_TEMP/cookies.txt"
+            export CLIP_YTDLP_COOKIES="$RUNNER_TEMP/cookies.txt"
+          fi
+          python -m clipper.gh_job run $FILES
+
+      - name: Report a crash to the page
+        if: failure() && steps.req.outputs.files != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FILES: ${{ steps.req.outputs.files }}
+        run: python3 -m clipper.gh_job fail $FILES
