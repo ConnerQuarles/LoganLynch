@@ -22,6 +22,23 @@ python -m clipper.pipeline "https://www.youtube.com/watch?v=..." -o clips/
 
 The first run downloads the Whisper speech model (~500 MB for `small`).
 
+## Paste-a-link version (free, runs on GitHub)
+
+`https://connerquarles.github.io/LoganLynch/` (the page is `docs/index.html`).
+Paste a link and the page commits a request file to `clipper/jobs/requests/`;
+`.github/workflows/clipper.yml` runs this pipeline on a free GitHub Actions
+runner and publishes the clips as the prerelease `clips-<id>`, which the page
+polls and shows. Repo secrets it uses:
+
+| Secret | Needed for |
+| --- | --- |
+| `YT_COOKIES` | YouTube: runners get "confirm you're not a bot" without logged-in cookies (contents of a cookies.txt export) |
+| `ANTHROPIC_API_KEY` | Claude scoring (otherwise transcript + audio heuristic) |
+| `ANTHROPIC_WORKSPACE_ID` | Only for org-level keys that aren't scoped to a workspace |
+
+`.github/workflows/clipper-selftest.yml` checks the whole path end to end on
+GitHub with a generated talking video whenever the pipeline changes.
+
 ## Put it online
 
 See [DEPLOY.md](DEPLOY.md) for a password-protected HTTPS deploy on a

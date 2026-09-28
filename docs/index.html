@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Clipper</title>
+<meta name="description" content="Paste a video link, get its best 30-second moments as vertical, captioned clips rated out of 100.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#101318; --panel:#171b22; --panel-2:#1e232c; --line:#2b313c;
+  --ink:#eef1f5; --dim:#8e97a6; --faint:#5d6574;
+  --tape:#ff8a3d; --tape-ink:#1a0e05;
+  --good:#3ddc97; --ok:#f5c84b; --meh:#ff9a52; --bad:#ff5c6c;
+  --f-display:"Bricolage Grotesque",ui-sans-serif,system-ui,sans-serif;
+  --f-body:"Figtree",ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --f-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:15px/1.5 var(--f-body);padding-inline:16px;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+main{max-width:1120px;margin:0 auto;padding-block:36px 64px;display:grid;gap:22px}
+h1,h2,h3{font-family:var(--f-display);text-wrap:balance;margin:0}
+h1{font-size:clamp(30px,5vw,44px);font-weight:800;letter-spacing:-.02em;line-height:1}
+h1 em{font-style:normal;color:var(--tape)}
+.lede{color:var(--dim);max-width:62ch;margin:8px 0 0}
+.mono{font-family:var(--f-mono);font-variant-numeric:tabular-nums}
+a{color:var(--tape)}
+button,select,input{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--tape);outline-offset:2px}
+
+.go-card{background:var(--panel);border-radius:16px;padding:18px;display:grid;gap:14px}
+.link-row{display:flex;gap:10px;flex-wrap:wrap}
+#url{flex:1 1 300px;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:14px 16px;font-size:16px}
+#url:focus{outline:none;border-color:var(--tape)}
+.go{background:var(--tape);color:var(--tape-ink);border:0;border-radius:12px;padding:14px 22px;font-weight:700;font-size:16px}
+.go:disabled{opacity:.45;cursor:not-allowed}
+.opts{display:flex;flex-wrap:wrap;gap:18px;align-items:center;color:var(--dim);font-size:14px}
+.seg{display:inline-flex;gap:6px;margin-left:8px}
+.seg button{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:5px 11px}
+.seg button[aria-pressed="true"]{background:var(--tape);color:var(--tape-ink);border-color:var(--tape);font-weight:600}
+.small{font-size:13px;color:var(--faint);margin:0}
+
+.status{background:var(--panel);border-radius:16px;padding:18px;display:grid;gap:12px}
+.status h2{font-size:18px}
+.steps{list-style:none;margin:0;padding:0;display:flex;flex-wrap:wrap;gap:8px}
+.steps li{font-size:13px;padding:4px 10px;border-radius:99px;background:var(--panel-2);color:var(--faint)}
+.steps li.done{color:var(--good)}
+.steps li.active{color:var(--tape-ink);background:var(--tape);font-weight:600}
+.bar{height:5px;background:var(--line);border-radius:3px;overflow:hidden}
+.bar i{display:block;height:100%;width:0;background:var(--tape);transition:width .4s}
+.msg{margin:0;color:#cfd5de}
+.msg.err{color:var(--bad)}
+.handoff{border:1px dashed var(--tape);border-radius:12px;padding:14px;display:grid;gap:8px}
+.handoff .go{justify-self:start;text-decoration:none;padding:10px 16px;font-size:15px}
+
+.clips{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:16px}
+.clip{background:var(--panel);border-radius:14px;overflow:hidden;display:flex;flex-direction:column}
+.frame{position:relative;background:#000;aspect-ratio:9/16;max-width:100%}
+.frame img,.frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
+.frame .play{position:absolute;inset:0;display:grid;place-items:center;background:transparent;border:0}
+.frame .play span{width:62px;height:62px;border-radius:50%;background:#000a;display:grid;place-items:center;font-size:24px;padding-left:4px}
+.rank{position:absolute;top:10px;left:10px;background:#000b;border-radius:99px;padding:2px 9px;font-weight:600;font-size:13px}
+.tc{position:absolute;bottom:10px;left:10px;background:#000b;border-radius:6px;padding:2px 7px;font-size:12px}
+.body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
+.head{display:flex;gap:12px;align-items:center}
+.ring{flex:none;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;
+  background:conic-gradient(var(--c) calc(var(--s)*1%),var(--line) 0)}
+.ring b{width:47px;height:47px;border-radius:50%;background:var(--panel);display:grid;place-items:center;
+  font:800 19px var(--f-display);color:var(--c)}
+.head h3{font-size:16px;line-height:1.25}
+.head small{color:var(--dim);font-size:12px}
+.bars{display:grid;gap:5px}
+.b{display:grid;grid-template-columns:42px 1fr 26px;gap:8px;align-items:center;font-size:12px;color:var(--dim)}
+.b i{height:5px;border-radius:3px;background:var(--line);overflow:hidden;display:block}
+.b i::after{content:"";display:block;height:100%;width:calc(var(--v)*1%);background:var(--c)}
+.b em{font-style:normal;text-align:right;color:var(--ink)}
+.why{margin:0;font-size:14px;color:#cfd5de}
+.quote{margin:0;color:var(--dim);font-size:13px;border-left:3px solid var(--line);padding-left:10px;max-height:84px;overflow:auto}
+.dl{margin-top:auto;display:block;text-align:center;background:var(--tape);color:var(--tape-ink);border-radius:9px;padding:10px;font-weight:700;text-decoration:none}
+
+details{background:var(--panel);border-radius:14px;padding:14px 18px}
+summary{cursor:pointer;font-weight:600}
+details p,details ol{color:var(--dim);font-size:14px}
+.tok{display:flex;gap:8px;flex-wrap:wrap}
+.tok input{flex:1 1 260px;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:9px 12px;font-family:var(--f-mono);font-size:13px}
+.btn{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:9px 14px;font-weight:600}
+.recent{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+.recent button{width:100%;text-align:left;background:var(--panel-2);border:1px solid var(--line);border-radius:9px;padding:8px 12px;display:flex;justify-content:space-between;gap:12px}
+.recent span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent time{color:var(--faint);flex:none;font-size:13px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Clip<em>per</em></h1>
+    <p class="lede">Paste a YouTube, TikTok, Instagram, X or direct video link. Clipper finds the best 30-second
+      moments, rates each out of 100, and makes vertical 9:16 clips with captions.</p>
+  </header>
+
+  <form class="go-card" id="form">
+    <div class="link-row">
+      <input id="url" type="url" inputmode="url" autocomplete="off" required
+             placeholder="https://www.youtube.com/watch?v=…" aria-label="Video link">
+      <button class="go" id="go" type="submit">Get clips</button>
+    </div>
+    <div class="opts">
+      <span>Clips<span class="seg" id="count" role="group" aria-label="Number of clips">
+        <button type="button" data-v="3" aria-pressed="false">3</button>
+        <button type="button" data-v="5" aria-pressed="true">5</button>
+        <button type="button" data-v="8" aria-pressed="false">8</button></span></span>
+      <label><input type="checkbox" id="captions" checked> Captions</label>
+    </div>
+    <p class="small" id="modeNote"></p>
+  </form>
+
+  <section class="status" id="status" hidden aria-live="polite">
+    <h2 id="statusTitle">Working…</h2>
+    <ul class="steps" id="steps"></ul>
+    <div class="bar"><i id="bar"></i></div>
+    <p class="msg" id="msg"></p>
+    <div class="handoff" id="handoff" hidden>
+      <strong>One tap on GitHub</strong>
+      <span class="small">GitHub opened in a new tab with your request filled in. Press <b>Commit changes</b> there,
+        then come back. This page updates by itself.</span>
+      <a class="go" id="handoffLink" target="_blank" rel="noopener">Open GitHub again</a>
+    </div>
+  </section>
+
+  <section class="clips" id="clips"></section>
+
+  <details id="tokenBox">
+    <summary>One-click mode (skip the GitHub tab)</summary>
+    <p>Save a GitHub token in this browser and "Get clips" submits directly, and results update faster.
+      The token stays on this device.</p>
+    <ol>
+      <li>Open <a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">GitHub → new fine-grained token</a>.</li>
+      <li>Repository access: <b>Only select repositories</b> → <b>LoganLynch</b>.</li>
+      <li>Permissions → Repository → <b>Contents: Read and write</b>. Generate, copy, paste below.</li>
+    </ol>
+    <div class="tok">
+      <input id="token" type="password" autocomplete="off" placeholder="github_pat_…" aria-label="GitHub token">
+      <button class="btn" type="button" id="saveTok">Save</button>
+      <button class="btn" type="button" id="clearTok">Remove</button>
+    </div>
+  </details>
+
+  <details id="recentBox">
+    <summary>Recent jobs</summary>
+    <ul class="recent" id="recent"></ul>
+  </details>
+
+  <p class="small">Runs free on GitHub Actions in the public repo
+    <a href="https://github.com/ConnerQuarles/LoganLynch" target="_blank" rel="noopener">ConnerQuarles/LoganLynch</a>,
+    so links you submit and the clips are public. Only clip videos you have the rights to use.</p>
+</main>
+
+<script>
+(() => {
+"use strict";
+const OWNER = "ConnerQuarles", REPO = "LoganLynch", BRANCH = "claude/opusclip-replica-30sec-ylkjf0";
+const API = `https://api.github.com/repos/${OWNER}/${REPO}`;
+const STAGES = [["setup","Starting"],["download","Downloading"],["transcribe","Transcribing"],
+  ["pick","Scoring"],["render","Rendering"],["upload","Uploading"]];
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try { const v = localStorage.getItem("clipper." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v){ try { localStorage.setItem("clipper." + k, JSON.stringify(v)); } catch {} },
+  del(k){ try { localStorage.removeItem("clipper." + k); } catch {} },
+};
+let count = 5, pollTimer = null, currentId = null;
+
+// ---- controls ---------------------------------------------------------------------
+$("count").addEventListener("click", e => {
+  const b = e.target.closest("button"); if (!b) return;
+  for (const x of $("count").children) x.setAttribute("aria-pressed", String(x === b));
+  count = Number(b.dataset.v);
+});
+function modeNote(){
+  const t = store.get("token", "");
+  $("modeNote").textContent = t
+    ? "One-click mode is on. Most videos take 3–10 minutes."
+    : "GitHub will open once to confirm your request (one tap). Most videos take 3–10 minutes.";
+  $("token").value = t ? "••••••••" + t.slice(-4) : "";
+}
+$("saveTok").addEventListener("click", () => {
+  const v = $("token").value.trim();
+  if (v && !v.startsWith("••")) { store.set("token", v); modeNote(); }
+});
+$("clearTok").addEventListener("click", () => { store.del("token"); modeNote(); });
+modeNote();
+
+// ---- submit -----------------------------------------------------------------------
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  const url = $("url").value.trim();
+  if (!/^https?:\/\//i.test(url)) return showError("Paste a full link that starts with https://");
+  const id = new Date().toISOString().slice(0, 10).replace(/-/g, "") + "-" + Math.random().toString(36).slice(2, 8);
+  const job = { url, count, captions: $("captions").checked };
+  const content = JSON.stringify(job, null, 2) + "\n";
+  const path = `clipper/jobs/requests/${id}.json`;
+  const token = store.get("token", "");
+  $("go").disabled = true;
+  try {
+    if (token) {
+      const r = await fetch(`${API}/contents/${path}`, {
+        method: "PUT",
+        headers: { Authorization: `Bearer ${token}`, Accept: "application/vnd.github+json" },
+        body: JSON.stringify({ message: `Clip request: ${url}`, branch: BRANCH,
+          content: btoa(unescape(encodeURIComponent(content))) }),
+      });
+      if (r.status === 401) throw new Error("GitHub rejected the saved token. Remove it and add a new one.");
+      if (r.status === 403 || r.status === 404) throw new Error("The saved token can't write to LoganLynch. Give it Contents: Read and write on that repo.");
+      if (!r.ok) throw new Error(`GitHub said ${r.status}. Try again in a moment.`);
+      remember(id, url); open(id, false);
+    } else {
+      const gh = `https://github.com/${OWNER}/${REPO}/new/${BRANCH}?filename=${encodeURIComponent(path)}`
+        + `&value=${encodeURIComponent(content)}&message=${encodeURIComponent("Clip request: " + url)}`;
+      window.open(gh, "_blank", "noopener");
+      $("handoffLink").href = gh;
+      remember(id, url); open(id, true);
+    }
+  } catch (err) {
+    showError(err.message);
+  } finally {
+    $("go").disabled = false;
+  }
+});
+
+function remember(id, url){
+  const list = store.get("jobs", []).filter(j => j.id !== id);
+  list.unshift({ id, url, at: Date.now() });
+  store.set("jobs", list.slice(0, 25)); renderRecent();
+}
+function renderRecent(){
+  const list = store.get("jobs", []);
+  $("recentBox").hidden = !list.length;
+  $("recent").innerHTML = "";
+  for (const j of list) {
+    const li = document.createElement("li"), b = document.createElement("button");
+    const s = document.createElement("span"); s.textContent = j.url;
+    const t = document.createElement("time"); t.textContent = new Date(j.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+    b.append(s, t); b.type = "button"; b.onclick = () => open(j.id, false);
+    li.append(b); $("recent").append(li);
+  }
+}
+renderRecent();
+
+// ---- polling ----------------------------------------------------------------------
+function open(id, handoff){
+  currentId = id; clearTimeout(pollTimer);
+  history.replaceState(null, "", "?job=" + id);
+  $("status").hidden = false; $("clips").innerHTML = "";
+  $("handoff").hidden = !handoff;
+  setProgress("queued", 0, handoff ? "Waiting for you to press Commit changes on GitHub…" : "Waiting for GitHub to start the job…");
+  $("statusTitle").textContent = "Working…";
+  poll(id, Date.now());
+}
+async function poll(id, since){
+  if (id !== currentId) return;
+  const token = store.get("token", "");
+  let delay = token ? 6000 : 40000;          // no token: GitHub allows ~60 checks an hour
+  try {
+    const r = await fetch(`${API}/releases/tags/clips-${id}`, {
+      cache: "no-store", headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (r.status === 404) {
+      const mins = (Date.now() - since) / 60000;
+      if (mins > 6) setProgress("queued", 0, "GitHub hasn't picked this up yet. If you didn't press Commit changes, do that now — or check the Actions tab.", true);
+    } else if (r.status === 403 || r.status === 429) {
+      setProgress("queued", 0, "GitHub's hourly limit for checks without a token was reached. This page keeps trying; one-click mode below avoids it.");
+      delay = 120000;
+    } else if (r.ok) {
+      const rel = await r.json(), st = parseState(rel.body);
+      if (st) {
+        $("handoff").hidden = true;
+        if (st.status === "done") return showDone(rel, st);
+        if (st.status === "error") return showFailed(st);
+        const label = (STAGES.find(s => s[0] === normStage(st.stage)) || [0, "Working"])[1];
+        setProgress(normStage(st.stage), st.pct || 0, `${label}…`);
+        if (!token) delay = 30000;
+      }
+    }
+  } catch { /* offline for a moment: keep trying */ }
+  pollTimer = setTimeout(() => poll(id, since), delay);
+}
+function parseState(body){
+  const m = /<!-- clipper:([\s\S]*?) -->/.exec(body || "");
+  try { return m ? JSON.parse(m[1]) : null; } catch { return null; }
+}
+const normStage = s => ({ probe: "download", audio: "transcribe", done: "upload" })[s] || s;
+function setProgress(stage, pct, text, isErr){
+  const idx = STAGES.findIndex(s => s[0] === stage);
+  $("steps").innerHTML = STAGES.map(([k, label], i) =>
+    `<li class="${i < idx ? "done" : i === idx ? "active" : ""}">${label}</li>`).join("");
+  const overall = idx < 0 ? 0.03 : (idx + (stage === "download" || stage === "render" ? pct : 0.5)) / STAGES.length;
+  $("bar").style.width = `${Math.round(overall * 100)}%`;
+  $("msg").textContent = text; $("msg").className = "msg" + (isErr ? " err" : "");
+}
+function showError(text){
+  $("status").hidden = false; $("statusTitle").textContent = "Couldn't start";
+  $("steps").innerHTML = ""; $("bar").style.width = "0"; $("handoff").hidden = true;
+  $("msg").textContent = text; $("msg").className = "msg err";
+}
+function showFailed(st){
+  $("statusTitle").textContent = "That one didn't work";
+  $("msg").className = "msg err";
+  $("msg").textContent = st.error || "The job failed.";
+  if (st.run) { const a = document.createElement("a"); a.href = st.run; a.target = "_blank"; a.rel = "noopener"; a.textContent = " Open the log."; $("msg").append(a); }
+}
+
+// ---- results ----------------------------------------------------------------------
+const tier = s => s >= 80 ? "var(--good)" : s >= 60 ? "var(--ok)" : s >= 40 ? "var(--meh)" : "var(--bad)";
+const fmt = t => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+function showDone(rel, st){
+  const res = st.result || { clips: [] };
+  const asset = name => (rel.assets || []).find(a => a.name === name)?.browser_download_url;
+  $("statusTitle").textContent = `${res.clips.length} clip${res.clips.length === 1 ? "" : "s"}, best first`;
+  $("steps").innerHTML = ""; $("bar").style.width = "100%";
+  $("msg").className = "msg";
+  $("msg").innerHTML = (res.picked_by === "claude"
+    ? "Scored by Claude from the transcript."
+    : "Scored by audio energy and speech (add an Anthropic key to the repo for Claude scoring).")
+    + ` <a href="${esc(rel.html_url)}" target="_blank" rel="noopener">View on GitHub</a>`;
+  $("clips").innerHTML = res.clips.map((c, i) => {
+    const vid = asset(c.file), poster = asset(c.poster);
+    const bar = (l, v) => `<div class="b">${l}<i style="--v:${+v || 0}"></i><em class="mono">${+v || 0}</em></div>`;
+    return `<article class="clip" style="--c:${tier(c.score)}">
+      <div class="frame">${poster ? `<img src="${esc(poster)}" alt="" loading="lazy">` : ""}
+        ${vid ? `<button class="play" type="button" data-src="${esc(vid)}" aria-label="Play clip ${i + 1}"><span>▶</span></button>` : ""}
+        <span class="rank">#${i + 1}</span><span class="tc mono">${fmt(c.start)} – ${fmt(c.end)}</span></div>
+      <div class="body">
+        <div class="head"><div class="ring" style="--s:${+c.score || 0}"><b>${+c.score || 0}</b></div>
+          <div><h3>${esc(c.title)}</h3><small>Virality score / 100</small></div></div>
+        <div class="bars">${bar("Hook", c.hook)}${bar("Flow", c.flow)}${bar("Value", c.value)}</div>
+        <p class="why">${esc(c.reason)}</p>
+        ${c.transcript ? `<p class="quote">“${esc(c.transcript)}”</p>` : ""}
+        ${vid ? `<a class="dl" href="${esc(vid)}">Download MP4</a>` : ""}
+      </div></article>`;
+  }).join("");
+  for (const b of $("clips").querySelectorAll(".play")) b.addEventListener("click", () => {
+    const v = document.createElement("video");
+    v.src = b.dataset.src; v.controls = true; v.autoplay = true; v.playsInline = true;
+    v.onerror = () => { b.closest(".frame").insertAdjacentHTML("beforeend", '<span class="tc" style="bottom:auto;top:44px">Can\'t play here — use Download</span>'); };
+    b.replaceWith(v);
+  });
+}
+
+// ---- deep link ----------------------------------------------------------------------
+const q = new URLSearchParams(location.search).get("job");
+if (q && /^[a-z0-9][a-z0-9-]{5,40}$/.test(q)) open(q, false);
+})();
+</script>
+</body>
+</html>
