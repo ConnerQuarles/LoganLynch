@@ -43,6 +43,8 @@ button{cursor:pointer}
 .seg button{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:6px 12px}
 .seg button[aria-pressed="true"]{background:var(--tape);color:var(--tape-ink);border-color:var(--tape);font-weight:600}
 input[type=range]{accent-color:var(--tape);width:100%}
+.check{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--ink)}
+.check input{accent-color:var(--tape);width:16px;height:16px}
 .go{background:var(--tape);color:var(--tape-ink);border:0;border-radius:10px;padding:12px 18px;font-weight:700;font-size:16px}
 .go:disabled{opacity:.45;cursor:not-allowed}
 .hint{color:var(--faint);font-size:13px;margin:0}
@@ -80,6 +82,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 .bar i::after{content:"";display:block;height:100%;width:calc(var(--v)*1%);background:var(--c)}
 .bar em{font-style:normal;text-align:right;color:var(--ink)}
 .why{margin:0;font-size:14px;color:#cfd5de}
+.quote{margin:0;color:var(--dim);font-size:13px;border-left:3px solid var(--line);padding-left:10px;max-height:84px;overflow:auto}
 .actions{margin-top:auto;display:flex;gap:8px;flex-wrap:wrap}
 .btn{flex:1;border-radius:9px;padding:9px 12px;font-weight:600;border:1px solid var(--line);background:var(--panel-2)}
 .btn.primary{background:var(--tape);color:var(--tape-ink);border-color:var(--tape)}
@@ -121,11 +124,11 @@ input[type=range]{accent-color:var(--tape);width:100%}
           <button type="button" data-v="fill" aria-pressed="false">Fill (crop)</button>
         </div>
       </div>
+      <label class="check"><input type="checkbox" id="captions" checked> Captions (speech-to-text runs in your browser)</label>
       <div class="field" id="focusField" hidden><span>Crop focus <span class="mono" id="focusVal">50%</span></span>
         <input type="range" id="focus" min="0" max="100" value="50" aria-label="Crop focus, left to right">
       </div>
       <button class="go" id="go" disabled>Find clips</button>
-      <p class="hint">Have a YouTube or TikTok link instead? <a href="https://connerquarles.github.io/LoganLynch/" target="_blank" rel="noopener" style="color:var(--tape)">Use Clipper for links</a>.</p>
       <p class="hint" id="aiHint">Claude rates each moment from its frames and audio. Your first run asks permission to use your Claude account.</p>
     </div>
   </section>
@@ -147,7 +150,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 const CLIP = 30, HOP = 0.5, OUT_W = 720, OUT_H = 1280;
 const $ = id => document.getElementById(id);
 const state = { file: null, url: null, duration: 0, loud: null, clips: [], vw: 16, vh: 9,
-  count: 5, layout: "fit", focus: 0.5, busy: false, example: true };
+  count: 5, layout: "fit", focus: 0.5, captions: true, busy: false, example: true, pcm: null };
 const cap = { sample: null, downloads: null };
 
 // ---- capabilities: render without them, light up when they resolve --------------
@@ -183,6 +186,7 @@ const drop = $("drop");
 drop.addEventListener("drop", e => e.dataTransfer.files[0] && pickFile(e.dataTransfer.files[0]));
 $("file").addEventListener("change", e => e.target.files[0] && pickFile(e.target.files[0]));
 $("go").addEventListener("click", () => run());
+$("captions").addEventListener("change", e => { state.captions = e.target.checked; });
 
 function pickFile(f){
   if (state.busy) return;
@@ -218,11 +222,13 @@ function seek(v, t){
 
 async function loudnessCurve(file){
   // Decoding needs the whole file in memory; big files can fail, handled by caller.
+  // Decode straight to 16 kHz mono: that's what Whisper wants, and plenty for loudness.
   const buf = await file.arrayBuffer();
   const Ctx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
-  const actx = new Ctx(1, 44100, 44100);
+  const actx = new Ctx(1, 16000, 16000);
   const audio = await actx.decodeAudioData(buf);
   const ch = audio.getChannelData(0), rate = audio.sampleRate, step = Math.floor(rate * HOP);
+  state.pcm = rate === 16000 ? ch : null;
   const out = new Float32Array(Math.floor(ch.length / step));
   for (let i = 0; i < out.length; i++){
     let sum = 0;
@@ -230,6 +236,55 @@ async function loudnessCurve(file){
     out[i] = 20 * Math.log10(Math.sqrt(sum / (step / 4)) + 1e-6);
   }
   return out;
+}
+
+// ---- speech-to-text (Whisper-base in a worker, files published next to this page) ----
+const asr = { worker: null, seq: 0, waiting: new Map(), onProgress: null, broken: false };
+function asrWorker(){
+  if (asr.worker || asr.broken) return asr.worker;
+  try { asr.worker = new Worker("whisper/asr-worker.js", { type: "module" }); }
+  catch { asr.broken = true; return null; }
+  asr.worker.onmessage = ({ data }) => {
+    if (data.type === "progress") return asr.onProgress?.(data);
+    const w = asr.waiting.get(data.id); if (!w) return;
+    asr.waiting.delete(data.id);
+    data.type === "error" ? w.reject(new Error(data.message)) : w.resolve(data);
+  };
+  asr.worker.onerror = e => {
+    e.preventDefault?.(); asr.broken = true;
+    for (const w of asr.waiting.values()) w.reject(new Error("Speech-to-text couldn't start in this browser."));
+    asr.waiting.clear();
+  };
+  return asr.worker;
+}
+function transcribe(audio){
+  const w = asrWorker();
+  if (!w) return Promise.reject(new Error("Speech-to-text isn't available in this browser."));
+  const id = ++asr.seq;
+  return new Promise((resolve, reject) => {
+    asr.waiting.set(id, { resolve, reject });
+    w.postMessage({ type: "transcribe", id, audio }, [audio.buffer]);
+  });
+}
+// Transcribe each window; words come back relative to the clip start.
+async function captionClips(list){
+  if (!state.pcm) throw new Error("This video's audio couldn't be read for captions.");
+  let first = true;
+  asr.onProgress = d => {
+    if (d.stage === "ready") return setStatus(`Transcribing moment 1 of ${list.length}…`);
+    setStatus(`Loading the speech model (first time only, ~130 MB)… ${Math.round(d.loaded / d.total * 100)}%`);
+  };
+  for (const [i, c] of list.entries()){
+    if (!first) setStatus(`Transcribing moment ${i + 1} of ${list.length}…`);
+    // Whisper drops its last sentence when speech runs right up to the 30 s input edge,
+    // so stop just short of it: at worst a word in the final half-second goes uncaptioned.
+    const a = Math.floor(c.start * 16000), b = Math.min(state.pcm.length, a + Math.floor(Math.min(c.end - c.start, 29.4) * 16000));
+    const res = await transcribe(state.pcm.slice(a, b));
+    first = false; asr.onProgress = null;
+    setStatus(`Transcribing moment ${Math.min(i + 2, list.length)} of ${list.length}…`);
+    c.words = res.words.filter(w => w.start < c.end - c.start);
+    c.transcript = res.text;
+  }
 }
 
 // ---- scoring (mirrors the Python heuristic) --------------------------------------
@@ -287,26 +342,29 @@ async function contactSheet(v, clip){
 
 async function rateWithClaude(v, cands){
   const limits = await cap.sample.limits().catch(() => null);
-  if (!limits?.images) return null;
-  const list = cands.slice(0, Math.min(cands.length, limits.images.maxCount));
+  const canSee = !!limits?.images;
+  if (!canSee && !cands.some(c => c.transcript)) return null;   // nothing to judge beyond the heuristic
+  const list = canSee ? cands.slice(0, Math.min(cands.length, limits.images.maxCount)) : cands;
   const images = [];
-  for (const [i, c] of list.entries()){
+  for (const [i, c] of (canSee ? list : []).entries()){
     setStatus(`Grabbing frames for moment ${i + 1} of ${list.length}…`);
     images.push(await contactSheet(v, c));
   }
   const rows = list.map((c, i) =>
     `${i + 1}. ${fmt(c.start)}-${fmt(c.end)} | audio energy percentile ${c.value} | opening-3s energy percentile ${c.hook} | dead air ${Math.round(c.dead * 100)}%`
+    + (c.transcript != null ? `\n   Transcript: "${String(c.transcript).slice(0, 900).replace(/"/g, "'")}"` : "")
   ).join("\n");
+  const heard = list.some(c => c.transcript != null);
   const prompt =
 `I'm cutting vertical 30-second shorts (TikTok/Reels/Shorts) from a ${Math.round(state.duration)}-second video called "${state.file.name}".
-Below are ${list.length} candidate moments. Image N is a contact sheet of candidate N: four frames at roughly 1s, 9s, 18s and 27s into the clip, left-to-right then top-to-bottom. You can't hear the audio, so the audio stats are listed for each (percentiles are relative to the rest of this video).
+Below are ${list.length} candidate moments. ${canSee ? "Image N is a contact sheet of candidate N: four frames at roughly 1s, 9s, 18s and 27s into the clip, left-to-right then top-to-bottom. " : ""}${heard ? "Each candidate's transcript (automatic, may have small errors) and audio stats are listed" : "You can't hear the audio, so the audio stats are listed for each"} (percentiles are relative to the rest of this video).
 
 ${rows}
 
 Rate each candidate 0-100 on:
 - hook: would the opening grab someone scrolling?
-- flow: does it look like a coherent, self-contained moment rather than a random slice?
-- value: is something visibly happening (action, emotion, a reveal, a strong on-screen moment)?
+- flow: is it a coherent, self-contained moment that starts and ends cleanly, rather than a random slice?
+- value: is there a payoff (a punchline, insight, reveal, strong emotion or striking visual)?
 - score: overall likelihood it performs as a short.
 Calibrate honestly and use the whole range: 90+ is rare and exceptional, 70-89 strong, 50-69 usable, below 50 weak. Talking-head footage can still score well when the audio energy suggests an animated delivery.
 Give each a punchy title of at most 7 words and one sentence explaining the score.
@@ -314,7 +372,7 @@ Give each a punchy title of at most 7 words and one sentence explaining the scor
 Reply with only a JSON array, one object per candidate, in order:
 [{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"..."}]`;
   setStatus("Claude is rating the moments… (this can take up to a minute)");
-  const out = await cap.sample.json(prompt, { images });
+  const out = await cap.sample.json(prompt, canSee ? { images } : {});
   if (!Array.isArray(out)) return null;
   const clamp = x => Math.max(0, Math.min(100, Math.round(Number(x) || 0)));
   const rated = [];
@@ -341,21 +399,31 @@ async function run(){
     if (!isFinite(state.duration) || state.duration <= 0) throw new Error("Couldn't read the video's length.");
 
     setStatus("Measuring audio energy…");
+    state.pcm = null;
     try { state.loud = await loudnessCurve(state.file); }
     catch { state.loud = null; }
     if (!state.loud || state.loud.length < 4) state.loud = new Float32Array(Math.max(4, Math.ceil(state.duration / HOP)));
 
     let picks;
+    state.captionNote = "";
     if (state.duration <= CLIP + 0.5){
       picks = [{ start: 0, end: state.duration, score: 65, hook: 65, flow: 65, value: 65, dead: 0,
         title: "Full video", reason: "The video is already 30 seconds or shorter.", by: "heuristic" }];
+      if (state.captions){
+        try { await captionClips(picks); }
+        catch (e) { state.captionNote = e.message; }
+      }
     } else {
       const cands = scoreWindows(state.loud, state.duration);
-      const shortlist = nonOverlapping(cands, Math.min(12, state.count * 2));
+      const shortlist = nonOverlapping(cands, Math.min(12, state.count + 3));
       shortlist.forEach((c, i) => Object.assign(c, { title: `Moment ${i + 1}`, by: "heuristic",
         reason: c.score >= 80 ? "One of the most energetic stretches of audio in this video."
           : c.score >= 55 ? "Steady energy, but calmer than the top moments."
           : "A quieter stretch, included to reach your clip count." }));
+      if (state.captions){
+        try { await captionClips(shortlist); }
+        catch (e) { state.captionNote = e.message; }
+      }
       let rated = null;
       if (cap.sample){
         try { rated = await rateWithClaude(v, shortlist); }
@@ -366,9 +434,12 @@ async function run(){
     picks.sort((a, b) => b.score - a.score);
     state.clips = picks;
     const byClaude = picks[0]?.by === "claude";
+    const heard = picks.some(c => c.words);
     if (!$("method").textContent) $("method").textContent = byClaude
-      ? "Rated by Claude from four frames per moment plus the audio stats. It can't hear speech, so treat scores as a ranking."
+      ? (heard ? "Rated by Claude from the transcript, four frames per moment and the audio stats."
+               : "Rated by Claude from four frames per moment plus the audio stats. It couldn't read the speech, so treat scores as a ranking.")
       : "Rated by audio energy: scores rank moments within this video and don't judge what's said or shown.";
+    if (state.captionNote) $("method").textContent += ` No captions: ${state.captionNote}`;
 
     setStatus("Making previews…");
     for (const c of picks){
@@ -395,6 +466,33 @@ function claudeError(e){
 function snapshot(v){ // keep a still of the source frame for re-drawing posters when the layout changes
   const c = document.createElement("canvas"); c.width = Math.min(640, v.videoWidth); c.height = Math.round(c.width * v.videoHeight / v.videoWidth);
   c.getContext("2d").drawImage(v, 0, 0, c.width, c.height); return c;
+}
+
+// ---- captions: 3 words at a time, uppercase, the spoken word highlighted ----------
+const CAPTION_FONT = px => `800 ${px}px "Bricolage Grotesque", "Arial Black", Impact, sans-serif`;
+function drawCaptions(g, words, t, W, H){
+  let idx = -1;
+  for (let k = 0; k < words.length && words[k].start <= t + 0.02; k++) idx = k;
+  if (idx < 0 || t - words[idx].end > 0.7) return;           // before speech, or a pause: no caption
+  const g0 = Math.floor(idx / 3) * 3, group = words.slice(g0, g0 + 3);
+  const active = t <= words[idx].end + 0.15 ? idx - g0 : -1;
+  const texts = group.map(w => w.text.toUpperCase().replace(/^[\s"']+|[\s"']+$/g, ""));
+  let px = Math.round(W * 0.085);
+  g.font = CAPTION_FONT(px);
+  const space = () => g.measureText(" ").width;
+  let total = texts.reduce((a, s) => a + g.measureText(s).width, 0) + space() * (texts.length - 1);
+  if (total > W * 0.88){ px = Math.floor(px * W * 0.88 / total); g.font = CAPTION_FONT(px); total = texts.reduce((a, s) => a + g.measureText(s).width, 0) + space() * (texts.length - 1); }
+  let x = (W - total) / 2; const y = H * 0.72;
+  g.save();
+  g.textBaseline = "middle"; g.lineJoin = "round"; g.miterLimit = 2;
+  texts.forEach((s, k) => {
+    g.lineWidth = px * 0.2; g.strokeStyle = "#000"; g.strokeText(s, x, y);
+    g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.06;
+    g.fillStyle = k === active ? "#ffe11a" : "#ffffff"; g.fillText(s, x, y);
+    g.shadowColor = "transparent";
+    x += g.measureText(s).width + space();
+  });
+  g.restore();
 }
 
 // ---- drawing a vertical frame ----------------------------------------------------
@@ -464,12 +562,14 @@ function renderCards(){
           <div><h3></h3><small>Virality score / 100</small></div></div>
         <div class="bars">${bar("Hook", c.hook)}${bar("Flow", c.flow)}${bar("Value", c.value)}</div>
         <p class="why"></p>
+        <p class="quote" hidden></p>
         <div class="prog" hidden><i></i></div>
         <p class="note" hidden></p>
         <div class="actions"><button class="btn primary" type="button">${state.example ? "Example clip" : "Render clip"}</button></div>
       </div>`;
     el.querySelector("h3").textContent = c.title;
     el.querySelector(".why").textContent = c.reason;
+    if (c.transcript){ const q = el.querySelector(".quote"); q.hidden = false; q.textContent = `“${c.transcript}”`; }
     const frame = el.querySelector(".frame");
     if (c.poster) frame.prepend(c.poster);
     const btn = el.querySelector(".btn");
@@ -514,6 +614,8 @@ async function renderClip(c, i, el){
 
     const frameEl = el.querySelector(".frame"), live = cv;
     if (c.poster?.isConnected) c.poster.replaceWith(live); else frameEl.prepend(live);
+    const withCaps = state.captions && c.words?.length > 0;
+    if (withCaps) await document.fonts?.load?.(CAPTION_FONT(64)).catch(() => {});
     rec.start(250); await v.play();
     const len = c.end - c.start;
     let watchdog, onVis;
@@ -521,7 +623,9 @@ async function renderClip(c, i, el){
       let done = false, lastDraw = 0;
       const finish = () => { if (!done){ done = true; res(); } };
       const draw = () => {
-        drawFrame(g, v, OUT_W, OUT_H); lastDraw = performance.now();
+        drawFrame(g, v, OUT_W, OUT_H);
+        if (withCaps) drawCaptions(g, c.words, v.currentTime - c.start, OUT_W, OUT_H);
+        lastDraw = performance.now();
         fill.style.width = `${Math.min(100, (v.currentTime - c.start) / len * 100)}%`;
       };
       const tick = () => {
@@ -556,8 +660,8 @@ async function renderClip(c, i, el){
     out.src = URL.createObjectURL(c.blob); out.controls = true; out.playsInline = true;
     frameEl.querySelector("canvas")?.replaceWith(out);
     btn.textContent = `Save .${c.ext}`;
-    note(el, cap.downloads ? `Rendered ${OUT_W}×${OUT_H}. Save it to your device.`
-      : `Rendered ${OUT_W}×${OUT_H}. Saving isn't available in this view.`);
+    note(el, cap.downloads ? `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}. Save it to your device.`
+      : `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}. Saving isn't available in this view.`);
     if (!cap.downloads) btn.disabled = true; else btn.disabled = false;
   } catch (e) {
     btn.disabled = false; btn.textContent = "Render clip";
