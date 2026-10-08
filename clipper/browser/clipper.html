@@ -112,8 +112,8 @@ input[type=range]{accent-color:var(--tape);width:100%}
 <main>
   <header>
     <h1>Clip<em>per</em></h1>
-    <p class="lede">Drop in a long video. Clipper finds its best 30-second moments, rates each out of 100 and turns
-      them into vertical 9:16 clips. Everything runs in your browser; your video is never uploaded.</p>
+    <p class="lede">Drop in a long video. Clipper finds its best moments, rates each out of 100 and turns
+      them into vertical 9:16 clips with captions. Everything runs in your browser; your video is never uploaded.</p>
   </header>
 
   <section class="setup">
@@ -144,12 +144,27 @@ input[type=range]{accent-color:var(--tape);width:100%}
           <button type="button" data-v="8" aria-pressed="false">8</button>
         </div>
       </div>
+      <div class="field"><span>Clip length</span>
+        <div class="seg" id="clipLen" role="group" aria-label="Clip length">
+          <button type="button" data-v="15" aria-pressed="false">15s</button>
+          <button type="button" data-v="30" aria-pressed="true">30s</button>
+          <button type="button" data-v="45" aria-pressed="false">45s</button>
+          <button type="button" data-v="60" aria-pressed="false">60s</button>
+        </div>
+      </div>
       <div class="field"><span>Vertical layout</span>
         <div class="seg" id="layout" role="group" aria-label="Vertical layout">
           <button type="button" data-v="fit" aria-pressed="true">Fit + blur</button>
           <button type="button" data-v="fill" aria-pressed="false">Fill (crop)</button>
           <button type="button" data-v="split" aria-pressed="false">Split: facecam + game</button>
         </div>
+      </div>
+      <div class="field" id="cropField" hidden><span>Crop</span>
+        <div class="seg" id="cropMode" role="group" aria-label="Crop mode">
+          <button type="button" data-v="smart" aria-pressed="true">Smart: follow the person</button>
+          <button type="button" data-v="manual" aria-pressed="false">Manual</button>
+        </div>
+        <p class="hint">Smart crop uses Claude's read of each moment's frames. Without it, the manual position is used.</p>
       </div>
       <div class="field" id="camFields" hidden><span>Facecam corner &amp; size</span>
         <div class="seg" id="camCorner" role="group" aria-label="Facecam corner">
@@ -182,8 +197,10 @@ input[type=range]{accent-color:var(--tape);width:100%}
           <button type="button" data-v="low" aria-pressed="true">Lower</button>
           <button type="button" data-v="mid" aria-pressed="false">Middle</button>
         </div>
+        <label class="check"><input type="checkbox" id="flair" checked> Keyword colors &amp; emojis (picked by Claude)</label>
       </div>
       <label class="check"><input type="checkbox" id="hookTitle" checked> Hook title on screen for the first 3 seconds</label>
+      <label class="check"><input type="checkbox" id="progressBar"> Progress bar along the top</label>
       <div class="field" id="focusField" hidden><span>Crop focus (left ↔ right) <span class="mono" id="focusVal">50%</span></span>
         <input type="range" id="focus" min="0" max="100" value="50" aria-label="Crop focus, left to right">
       </div>
@@ -210,7 +227,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 const CLIP = 30, HOP = 0.5, OUT_W = 720, OUT_H = 1280;
 const $ = id => document.getElementById(id);
 const state = { file: null, url: null, duration: 0, loud: null, clips: [], vw: 16, vh: 9,
-  count: 5, layout: "fit", focus: 0.5, captions: true, vtype: "auto", camCorner: "tl", camSize: 0.3, capStyle: "pop", capPos: "low", capWords: 3, hookTitle: true, busy: false, example: true, pcm: null, video: null };
+  count: 5, layout: "fit", focus: 0.5, captions: true, vtype: "auto", clipLen: 30, cropMode: "smart", flair: true, progressBar: false, camCorner: "tl", camSize: 0.3, capStyle: "pop", capPos: "low", capWords: 3, hookTitle: true, busy: false, example: true, pcm: null, video: null };
 const cap = { sample: null, downloads: null };
 
 // ---- capabilities: render without them, light up when they resolve --------------
@@ -276,10 +293,29 @@ function applyType(t, withDefaults){
     state.capStyle = d.capStyle; setSeg("capStyle", d.capStyle);
     staleAll();
   }
-  try { localStorage.setItem("clipper.vtype", state.vtype); } catch {}
+  saveSettings();
+}
+const SAVED = ["vtype", "count", "clipLen", "layout", "cropMode", "camCorner", "camSize", "captions",
+  "capStyle", "capWords", "capPos", "flair", "hookTitle", "progressBar"];
+function saveSettings(){
+  try { localStorage.setItem("clipper.settings", JSON.stringify(Object.fromEntries(SAVED.map(k => [k, state[k]])))); } catch {}
+}
+function loadSettings(){
+  let saved = null, oldType = null;
+  try { saved = JSON.parse(localStorage.getItem("clipper.settings")); oldType = localStorage.getItem("clipper.vtype"); } catch {}
+  if (!saved || typeof saved !== "object") return applyType(oldType || "auto", true);
+  for (const k of SAVED) if (k in saved && typeof saved[k] === typeof state[k]) state[k] = saved[k];
+  if (!TYPES[state.vtype]) state.vtype = "auto";
+  if (![15, 30, 45, 60].includes(state.clipLen)) state.clipLen = 30;
+  for (const id of ["vtype", "count", "clipLen", "layout", "cropMode", "camCorner", "camSize", "capStyle", "capWords", "capPos"]) setSeg(id, state[id]);
+  for (const id of ["captions", "flair", "hookTitle", "progressBar"]) $(id).checked = state[id];
+  $("capFields").hidden = !state.captions;
+  $("typeHint").textContent = TYPES[state.vtype].hint;
+  syncLayoutFields();
 }
 function syncLayoutFields(){
-  $("focusField").hidden = !(state.layout === "fill" || state.layout === "split");
+  $("cropField").hidden = state.layout !== "fill";
+  $("focusField").hidden = !((state.layout === "fill" && state.cropMode === "manual") || state.layout === "split");
   $("camFields").hidden = state.layout !== "split";
 }
 
@@ -288,20 +324,23 @@ function segment(id, key, cast = v => v){
     const b = e.target.closest("button"); if (!b) return;
     for (const x of $(id).children) x.setAttribute("aria-pressed", String(x === b));
     state[key] = cast(b.dataset.v);
-    if (["capStyle", "capPos", "capWords", "layout", "camCorner", "camSize"].includes(key)) staleAll();
-    if (key === "layout") syncLayoutFields();
-    if (["layout", "camCorner", "camSize"].includes(key)) drawAllPosters();
+    if (["capStyle", "capPos", "capWords", "layout", "camCorner", "camSize", "cropMode"].includes(key)) staleAll();
+    if (key === "layout" || key === "cropMode") syncLayoutFields();
+    if (["layout", "camCorner", "camSize", "cropMode"].includes(key)) drawAllPosters();
+    if (key === "clipLen" && !state.example && state.file && !state.busy) setStatus("Clip length changed. Press Find clips again to re-pick moments.", "idle");
+    saveSettings();
   });
 }
 segment("count", "count", Number);
 segment("camCorner", "camCorner");
 segment("camSize", "camSize", Number);
+segment("clipLen", "clipLen", Number);
+segment("cropMode", "cropMode");
 $("vtype").addEventListener("click", e => {
   const b = e.target.closest("button"); if (!b || b.dataset.v === state.vtype) return;
   applyType(b.dataset.v, true);
   if (!state.example && state.file && !state.busy) setStatus("Video type changed. Press Find clips again to re-pick moments for it.", "idle");
 });
-try { applyType(localStorage.getItem("clipper.vtype") || "auto", true); } catch { applyType("auto", false); }
 segment("layout", "layout");
 $("focus").addEventListener("input", e => {
   state.focus = e.target.value / 100; $("focusVal").textContent = e.target.value + "%"; drawAllPosters(); staleAll();
@@ -312,8 +351,9 @@ const drop = $("drop");
 drop.addEventListener("drop", e => e.dataTransfer.files[0] && pickFile(e.dataTransfer.files[0]));
 $("file").addEventListener("change", e => e.target.files[0] && pickFile(e.target.files[0]));
 $("go").addEventListener("click", () => run());
-$("captions").addEventListener("change", e => { state.captions = e.target.checked; $("capFields").hidden = !state.captions; });
-$("hookTitle").addEventListener("change", e => { state.hookTitle = e.target.checked; staleAll(); });
+$("captions").addEventListener("change", e => { state.captions = e.target.checked; $("capFields").hidden = !state.captions; saveSettings(); });
+for (const id of ["hookTitle", "flair", "progressBar"])
+  $(id).addEventListener("change", e => { state[id] = e.target.checked; staleAll(); saveSettings(); });
 segment("capStyle", "capStyle");
 segment("capPos", "capPos");
 segment("capWords", "capWords", Number);
@@ -407,15 +447,41 @@ async function captionClips(list){
   };
   for (const [i, c] of list.entries()){
     if (!first) setStatus(`Transcribing moment ${i + 1} of ${list.length}…`);
-    // Whisper drops its last sentence when speech runs right up to the 30 s input edge,
-    // so stop just short of it: at worst a word in the final half-second goes uncaptioned.
-    const a = Math.floor(c.start * 16000), b = Math.min(state.pcm.length, a + Math.floor(Math.min(c.end - c.start, 29.4) * 16000));
-    const res = await transcribe(state.pcm.slice(a, b));
+    const res = await transcribeWindow(c.start, c.end - c.start);
     first = false; asr.onProgress = null;
     setStatus(`Transcribing moment ${Math.min(i + 2, list.length)} of ${list.length}…`);
     c.words = mergeFragments(res.words.filter(w => w.start < c.end - c.start));
     c.transcript = res.text;
   }
+}
+
+// Whisper takes at most 30 s at a time, and drops its last sentence when speech runs right
+// up to that edge, so pieces stop at 29.4 s (<= 0.6 s of a 30 s clip goes uncaptioned).
+// Longer clips are cut into pieces at the quietest moment, so no word is sliced in half.
+async function transcribeWindow(start, len){
+  const words = [], texts = [];
+  let off = 0;
+  while (off < len - 0.3){
+    const rest = len - off;
+    const piece = rest <= 30 ? Math.min(rest, 29.4) : quietCut(start + off + 18, start + off + 29.4) - (start + off);
+    const a = Math.floor((start + off) * 16000), b = Math.min(state.pcm.length, a + Math.floor(piece * 16000));
+    if (b - a < 1600) break;
+    const res = await transcribe(state.pcm.slice(a, b));
+    for (const w of res.words) words.push({ ...w, start: w.start + off, end: w.end + off });
+    texts.push(res.text);
+    if (rest <= 30) break;
+    off += piece;
+  }
+  return { words, text: texts.join(" ").replace(/\s+/g, " ").trim() };
+}
+function quietCut(from, to){          // centre of the quietest 0.25 s between from and to
+  const SR = 16000, n = SR / 4; let best = to, bestE = Infinity;
+  for (let t = from; t + 0.25 <= to; t += 0.25){
+    const a = Math.floor(t * SR); let e = 0;
+    for (let j = a; j < a + n && j < state.pcm.length; j += 8) e += state.pcm[j] * state.pcm[j];
+    if (e < bestE){ bestE = e; best = t + 0.125; }
+  }
+  return best;
 }
 
 // Whisper sometimes splits a word ("near" + "-outer", "it" + "'s"): glue those back.
@@ -434,8 +500,9 @@ function scoreWindows(loud, duration){
   const n = loud.length, mean = loud.reduce((a, b) => a + b, 0) / n;
   const sd = Math.sqrt(loud.reduce((a, b) => a + (b - mean) ** 2, 0) / n) + 1e-6;
   const z = Array.from(loud, v => (v - mean) / sd);
-  const win = Math.round(CLIP / HOP), hookN = Math.round(3 / HOP), cands = [];
-  for (let start = 0; start <= duration - CLIP + 0.01; start += 1){
+  const LEN = state.clipLen;
+  const win = Math.round(LEN / HOP), hookN = Math.round(3 / HOP), cands = [];
+  for (let start = 0; start <= duration - LEN + 0.01; start += 1){
     const i = Math.round(start / HOP), chunk = z.slice(i, i + win);
     if (chunk.length < win * 0.8) continue;
     const live = chunk.filter(v => v >= -1.5);
@@ -451,7 +518,7 @@ function scoreWindows(loud, duration){
     const w = TYPES[state.vtype].w;
     const value = w.mean * mean + w.dyn * dyn + w.peak * Math.max(0, peak);
     const flow = -w.dead * dead + w.peakPos * posBonus;
-    cands.push({ start, end: start + CLIP, hookRaw: hook, flowRaw: flow, valueRaw: value,
+    cands.push({ start, end: start + LEN, hookRaw: hook, flowRaw: flow, valueRaw: value,
       raw: w.hook * hook + flow + value, dead, peakAt: at * HOP, spike: peak - mean });
   }
   // Percentile within this video, spread over 35-95.
@@ -474,13 +541,16 @@ function nonOverlapping(list, count, key = "score"){
 }
 
 // ---- Claude rating from contact sheets --------------------------------------------
+const SHEET_AT = [0.04, 0.32, 0.62, 0.92];   // where in each clip the four contact-sheet frames come from
 async function contactSheet(v, clip){
   const portrait = state.vh > state.vw;
   const cw = portrait ? 180 : 400, ch = Math.round(cw * state.vh / state.vw);
   const cols = portrait ? 4 : 2, rows = portrait ? 1 : 2;
   const c = document.createElement("canvas"); c.width = cw * cols; c.height = ch * rows;
   const g = c.getContext("2d");
-  const times = [1, 9, 18, 27].map(t => clip.start + Math.min(t, clip.end - clip.start - 0.5));
+  const len = clip.end - clip.start;
+  clip.sheetTimes = SHEET_AT.map(f => f * len);
+  const times = clip.sheetTimes.map(t => clip.start + Math.min(t, len - 0.5));
   for (let k = 0; k < 4; k++){
     await seek(v, times[k]);
     g.drawImage(v, (k % cols) * cw, Math.floor(k / cols) * ch, cw, ch);
@@ -500,12 +570,12 @@ async function rateWithClaude(v, cands){
   }
   const rows = list.map((c, i) =>
     `${i + 1}. ${fmt(c.start)}-${fmt(c.end)} | audio energy percentile ${c.value} | opening-3s energy percentile ${c.hook} | dead air ${Math.round(c.dead * 100)}% | loudest spike ${Math.round(c.peakAt ?? 0)}s in`
-    + (c.transcript != null ? `\n   Transcript: "${String(c.transcript).slice(0, 900).replace(/"/g, "'")}"` : "")
+    + (c.transcript != null ? `\n   Transcript: "${String(c.transcript).slice(0, Math.round(30 * state.clipLen)).replace(/"/g, "'")}"` : "")
   ).join("\n");
   const heard = list.some(c => c.transcript != null);
   const prompt =
-`I'm cutting vertical 30-second shorts (TikTok/Reels/Shorts) from a ${Math.round(state.duration)}-second video called "${state.file.name}".
-Below are ${list.length} candidate moments. ${canSee ? "Image N is a contact sheet of candidate N: four frames at roughly 1s, 9s, 18s and 27s into the clip, left-to-right then top-to-bottom. " : ""}${heard ? "Each candidate's transcript (automatic, may have small errors) and audio stats are listed" : "You can't hear the audio, so the audio stats are listed for each"} (percentiles are relative to the rest of this video).
+`I'm cutting vertical ${state.clipLen}-second shorts (TikTok/Reels/Shorts) from a ${Math.round(state.duration)}-second video called "${state.file.name}".
+Below are ${list.length} candidate moments. ${canSee ? `Image N is a contact sheet of candidate N: four frames at ${SHEET_AT.map(f => Math.round(f * state.clipLen) + "s").join(", ")} into the clip, left-to-right then top-to-bottom. ` : ""}${heard ? "Each candidate's transcript (automatic, may have small errors) and audio stats are listed" : "You can't hear the audio, so the audio stats are listed for each"} (percentiles are relative to the rest of this video).
 
 ${TYPES[state.vtype].guide ? TYPES[state.vtype].guide + "\n\n" : ""}${rows}
 
@@ -517,29 +587,51 @@ Rate each candidate 0-100 on:
 Calibrate honestly and use the whole range: 90+ is rare and exceptional, 70-89 strong, 50-69 usable, below 50 weak. Talking-head footage can still score well when the audio energy suggests an animated delivery.
 Give each a punchy title of at most 7 words (it is shown on screen as the hook, so make it make people stay), one sentence explaining the score, and a ready-to-post social caption: one or two short sentences in a casual voice, then 3 to 5 relevant hashtags.
 
+${canSee ? `Also, for editing:
+- subject_x: for each of the four frames of that candidate's contact sheet, in order, the horizontal centre of the main person or subject as a fraction of the frame's width (0 = left edge, 0.5 = middle, 1 = right edge), or null if there is no clear subject. With several people, use the one who seems to be speaking.
+- facecam: if the footage has a streamer's webcam overlay in a corner, that corner ("tl", "tr", "bl" or "br"), otherwise "none".
+` : ""}${heard ? `- keywords: 2 to 4 of the most important words in that candidate's transcript, copied exactly, to highlight in the captions.
+- emojis: up to 3 words from that transcript mapped to one fitting emoji each, e.g. {"money": "💰"}. Only where it adds energy; {} is fine.
+` : ""}
 Reply with only a JSON array, one object per candidate, in order:
-[{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"...","post":"... #tag #tag #tag"}]`;
+[{"n":1,"title":"...","hook":0,"flow":0,"value":0,"score":0,"reason":"...","post":"... #tag #tag #tag"${canSee ? ',"subject_x":[0.5,0.5,0.5,0.5],"facecam":"none"' : ""}${heard ? ',"keywords":["..."],"emojis":{}' : ""}}]`;
   setStatus("Claude is rating the moments… (this can take up to a minute)");
   const out = await cap.sample.json(prompt, canSee ? { images } : {});
   if (!Array.isArray(out)) return null;
   const clamp = x => Math.max(0, Math.min(100, Math.round(Number(x) || 0)));
-  const rated = [];
+  const rated = [], cams = {};
   for (const r of out){
     const c = list[Number(r?.n) - 1];
     if (!c || rated.includes(c)) continue;
+    // Smart crop: where the subject is at each contact-sheet frame.
+    if (Array.isArray(r.subject_x) && c.sheetTimes){
+      c.track = r.subject_x.slice(0, 4).map((x, k) => ({ t: c.sheetTimes[k], x: Number(x) }))
+        .filter(p => x01(p.x));
+    }
+    if (typeof r.facecam === "string") cams[r.facecam] = (cams[r.facecam] || 0) + 1;
+    if (Array.isArray(r.keywords)) c.keywords = new Set(r.keywords.slice(0, 6).map(normWord).filter(Boolean));
+    if (r.emojis && typeof r.emojis === "object"){
+      c.emojis = new Map(Object.entries(r.emojis).slice(0, 4)
+        .filter(([w, e]) => normWord(w) && /\p{Extended_Pictographic}/u.test(String(e)))
+        .map(([w, e]) => [normWord(w), [...String(e)].slice(0, 2).join("")]));
+    }
     Object.assign(c, { title: String(r.title || "").slice(0, 80) || "Highlight",
       reason: String(r.reason || "").slice(0, 300), post: String(r.post || "").slice(0, 600), hook: clamp(r.hook), flow: clamp(r.flow),
       value: clamp(r.value), score: clamp(r.score), by: "claude" });
     rated.push(c);
   }
+  const top = Object.entries(cams).sort((a, b) => b[1] - a[1])[0];
+  state.facecamGuess = top && top[1] >= Math.ceil(rated.length / 2) ? top[0] : null;
   return rated.length ? rated : null;
 }
+const x01 = x => typeof x === "number" && isFinite(x) && x >= 0 && x <= 1;
+const normWord = w => String(w).toLowerCase().replace(/[^\p{L}\p{N}']/gu, "");
 
 // ---- main flow ------------------------------------------------------------------
 async function run(){
   if (!state.file || state.busy) return;
   state.busy = true; state.example = false; $("go").disabled = true; $("sampleTag").hidden = true;
-  $("clips").innerHTML = ""; $("method").textContent = "";
+  $("clips").innerHTML = ""; $("method").textContent = ""; state.facecamGuess = null;
   try {
     setStatus("Reading video…");
     const v = await loadVideo(state.url);
@@ -555,9 +647,9 @@ async function run(){
 
     let picks;
     state.captionNote = "";
-    if (state.duration <= CLIP + 0.5){
+    if (state.duration <= state.clipLen + 0.5){
       picks = [{ start: 0, end: state.duration, score: 65, hook: 65, flow: 65, value: 65, dead: 0,
-        title: "Full video", reason: "The video is already 30 seconds or shorter.", by: "heuristic" }];
+        title: "Full video", reason: `The video is already ${state.clipLen} seconds or shorter.`, by: "heuristic" }];
       if (state.captions){
         try { await captionClips(picks); }
         catch (e) { state.captionNote = e.message; }
@@ -584,6 +676,7 @@ async function run(){
     }
     picks.sort((a, b) => b.score - a.score);
     state.clips = picks;
+    state.facecamGuess = state.facecamGuess || null;
     const byClaude = picks[0]?.by === "claude";
     const heard = picks.some(c => c.words);
     if (!$("method").textContent) $("method").textContent = byClaude
@@ -591,12 +684,21 @@ async function run(){
                : "Rated by Claude from four frames per moment plus the audio stats. It couldn't read the speech, so treat scores as a ranking.")
       : "Rated by audio energy: scores rank moments within this video and don't judge what's said or shown.";
     if (state.captionNote) $("method").textContent += ` No captions: ${state.captionNote}`;
+    const CORNER = { tl: "top-left", tr: "top-right", bl: "bottom-left", br: "bottom-right" };
+    if (byClaude && CORNER[state.facecamGuess]){
+      state.camCorner = state.facecamGuess; setSeg("camCorner", state.camCorner);
+      if (state.vtype === "gaming" && state.layout !== "split"){
+        state.layout = "split"; setSeg("layout", "split"); syncLayoutFields();
+        $("method").textContent += ` Facecam spotted in the ${CORNER[state.camCorner]} corner, so the layout switched to Split.`;
+      } else $("method").textContent += ` Facecam spotted in the ${CORNER[state.camCorner]} corner (set for the Split layout).`;
+      saveSettings();
+    }
 
     setStatus("Making previews…");
     for (const c of picks){
       await seek(v, c.start + Math.min(3, (c.end - c.start) / 2));
       const p = document.createElement("canvas"); p.width = 270; p.height = 480;
-      drawFrame(p.getContext("2d"), v, 270, 480); c.poster = p; c.posterSrc = await snapshot(v);
+      drawFrame(p.getContext("2d"), v, 270, 480, focusFor(c, posterT(c), 270, 480)); c.poster = p; c.posterSrc = await snapshot(v);
     }
     drawTimeline(); renderCards();
     setStatus(`Found ${picks.length} clip${picks.length === 1 ? "" : "s"}. Render any of them below.`, "idle");
@@ -621,7 +723,7 @@ function snapshot(v){ // keep a still of the source frame for re-drawing posters
 
 // ---- captions: 3 words at a time, uppercase, the spoken word highlighted ----------
 const CAPTION_FONT = px => `800 ${px}px "Bricolage Grotesque", "Arial Black", Impact, sans-serif`;
-function drawCaptions(g, words, t, W, H){
+function drawCaptions(g, words, t, W, H, flair){
   let idx = -1;
   for (let k = 0; k < words.length && words[k].start <= t + 0.02; k++) idx = k;
   if (idx < 0 || t - words[idx].end > 0.7) return;           // before speech, or a pause: no caption
@@ -629,6 +731,12 @@ function drawCaptions(g, words, t, W, H){
   const g0 = Math.floor(idx / n) * n, group = words.slice(g0, g0 + n);
   const active = t <= words[idx].end + 0.15 ? idx - g0 : -1;
   const style = state.capStyle, upper = style !== "clean";
+  const isKey = k => flair?.keywords?.has(normWord(group[k].text));
+  const emoji = (() => {                      // the most recent emoji word in this group that's been spoken
+    if (!flair?.emojis?.size) return null;
+    for (let k = idx - g0; k >= 0; k--){ const e = flair.emojis.get(normWord(group[k].text)); if (e) return { e, since: t - group[k].start }; }
+    return null;
+  })();
   const texts = group.map(w => { const x = w.text.replace(/^[\s"']+|[\s"']+$/g, ""); return upper ? x.toUpperCase() : x; });
   const boost = { 1: 1.35, 2: 1.15 }[n] || 1;
   let px = Math.round(W * (style === "clean" ? 0.07 : 0.085) * boost);
@@ -646,7 +754,7 @@ function drawCaptions(g, words, t, W, H){
     if (style === "box"){
       if (k === active){ g.fillStyle = "#ffe11a"; roundRect(g, x - px * 0.22, y - px * 0.62, w + px * 0.44, px * 1.2, px * 0.22); g.fill(); }
       else { g.lineWidth = px * 0.16; g.strokeStyle = "#000"; g.strokeText(s, x, y); }
-      g.fillStyle = k === active ? "#111" : "#fff"; g.fillText(s, x, y);
+      g.fillStyle = k === active ? "#111" : isKey(k) ? "#3ddc97" : "#fff"; g.fillText(s, x, y);
     } else if (style === "clean"){
       g.shadowColor = "rgba(0,0,0,.75)"; g.shadowBlur = px * 0.35; g.shadowOffsetY = px * 0.05;
       g.fillStyle = k === active ? "#fff" : "rgba(255,255,255,.82)"; g.fillText(s, x, y);
@@ -654,11 +762,18 @@ function drawCaptions(g, words, t, W, H){
     } else {
       g.lineWidth = px * 0.2; g.strokeStyle = "#000"; g.strokeText(s, x, y);
       g.shadowColor = "rgba(0,0,0,.45)"; g.shadowBlur = px * 0.25; g.shadowOffsetY = px * 0.06;
-      g.fillStyle = k === active ? "#ffe11a" : "#ffffff"; g.fillText(s, x, y);
+      g.fillStyle = k === active ? "#ffe11a" : isKey(k) ? "#3ddc97" : "#ffffff"; g.fillText(s, x, y);
       g.shadowColor = "transparent";
     }
     x += w + space();
   });
+  if (emoji && emoji.since >= 0){
+    const pop = Math.min(1, 0.55 + emoji.since / 0.18 * 0.45);       // quick pop-in
+    const ep = Math.round(px * 1.7 * pop);
+    g.font = `${ep}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif`;
+    g.textAlign = "center"; g.shadowColor = "transparent";
+    g.fillText(emoji.e, W / 2, y - px * 1.6);
+  }
   g.restore();
 }
 function roundRect(g, x, y, w, h, r){
@@ -687,7 +802,22 @@ function drawHookTitle(g, title, t, W, H){
 
 // ---- drawing a vertical frame ----------------------------------------------------
 const blurCanvas = document.createElement("canvas"); blurCanvas.width = 18; blurCanvas.height = 32;
-function drawFrame(g, src, W, H){
+// Smart crop: the crop position (0..1 across the overflow) that centres the subject at time t.
+function focusFor(c, t, W = OUT_W, H = OUT_H){
+  if (state.layout !== "fill" || state.cropMode !== "smart" || !c?.track?.length) return state.focus;
+  const tr = c.track; let x;
+  if (t <= tr[0].t) x = tr[0].x;
+  else if (t >= tr[tr.length - 1].t) x = tr[tr.length - 1].x;
+  else for (let k = 0; k + 1 < tr.length; k++){
+    if (t <= tr[k + 1].t){
+      const u = (t - tr[k].t) / (tr[k + 1].t - tr[k].t), e = u * u * (3 - 2 * u);   // ease in-out pan
+      x = tr[k].x + (tr[k + 1].x - tr[k].x) * e; break;
+    }
+  }
+  const sw = state.vw, sh = state.vh, cw = sh * W / H;      // crop width in source pixels
+  return sw > cw ? Math.min(1, Math.max(0, (x * sw - cw / 2) / (sw - cw))) : 0.5;
+}
+function drawFrame(g, src, W, H, focus = state.focus){
   const sw = src.videoWidth || src.width, sh = src.videoHeight || src.height;
   if (!sw || !sh) return;
   const portrait = sw / sh <= W / H + 0.01;
@@ -700,13 +830,13 @@ function drawFrame(g, src, W, H){
     g.drawImage(src, fx, fy, fw, fh, 0, 0, W, topH);
     const ga = W / botH; let gw = sh * ga, gh = sh;
     if (gw > sw){ gw = sw; gh = sw / ga; }
-    g.drawImage(src, (sw - gw) * state.focus, (sh - gh) / 2, gw, gh, 0, topH, W, botH);
+    g.drawImage(src, (sw - gw) * focus, (sh - gh) / 2, gw, gh, 0, topH, W, botH);
     g.fillStyle = "#000"; g.fillRect(0, topH - Math.max(2, H / 320), W, Math.max(4, H / 160));
     return;
   }
   if (portrait || state.layout === "fill"){
     const scale = Math.max(W / sw, H / sh), dw = sw * scale, dh = sh * scale;
-    const x = portrait ? (W - dw) / 2 : -(dw - W) * state.focus;
+    const x = portrait ? (W - dw) / 2 : -(dw - W) * focus;
     g.drawImage(src, x, (H - dh) / 2, dw, dh);
     return;
   }
@@ -721,9 +851,10 @@ function drawFrame(g, src, W, H){
 function drawAllPosters(){
   for (const c of state.clips){
     if (!c.posterSrc || !c.poster) continue;
-    drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480);
+    drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480, focusFor(c, posterT(c), 270, 480));
   }
 }
+const posterT = c => Math.min(3, (c.end - c.start) / 2);
 
 // ---- timeline -------------------------------------------------------------------
 function drawTimeline(){
@@ -836,10 +967,12 @@ async function nudge(c, d, el){
   state.busy = true;
   const btns = el.querySelectorAll(".nudge button, .btn"); btns.forEach(b => b.disabled = true);
   try {
+    const shift = start - c.start;
+    if (c.track) c.track = c.track.map(p => ({ t: p.t - shift, x: p.x }));   // same subject positions, new clip timing
     c.start = start; c.end = start + len;
     el.querySelector(".tc").textContent = `${fmt(c.start)} – ${fmt(c.end)}`;
     await seek(state.video, c.start + Math.min(3, len / 2));
-    c.posterSrc = snapshot(state.video); drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480);
+    c.posterSrc = snapshot(state.video); drawFrame(c.poster.getContext("2d"), c.posterSrc, 270, 480, focusFor(c, posterT(c), 270, 480));
     const fr = el.querySelector(".frame"); fr.querySelectorAll("video, canvas").forEach(n => n.remove()); fr.prepend(c.poster);
     if (state.captions && state.pcm){ note(el, "Re-transcribing…"); await captionClips([c]); }
     const ew = el.querySelector(".e-words"); if (ew){ ew.value = (c.words || []).map(w => w.text).join(" "); ew.disabled = !c.words?.length; }
@@ -881,7 +1014,7 @@ async function renderClip(c, i, el){
     await new Promise((res, rej) => { v.onloadedmetadata = res; v.onerror = rej; });
     await seek(v, c.start);
     const cv = document.createElement("canvas"); cv.width = OUT_W; cv.height = OUT_H;
-    const g = cv.getContext("2d"); drawFrame(g, v, OUT_W, OUT_H);
+    const g = cv.getContext("2d"); drawFrame(g, v, OUT_W, OUT_H, focusFor(c, 0));
     const stream = cv.captureStream(30);
     actx = new (window.AudioContext || window.webkitAudioContext)(); await actx.resume();
     const dest = actx.createMediaStreamDestination();
@@ -904,8 +1037,13 @@ async function renderClip(c, i, el){
       let done = false, lastDraw = 0;
       const finish = () => { if (!done){ done = true; res(); } };
       const draw = () => {
-        drawFrame(g, v, OUT_W, OUT_H);
-        if (withCaps) drawCaptions(g, c.words, v.currentTime - c.start, OUT_W, OUT_H);
+        const t = v.currentTime - c.start;
+        drawFrame(g, v, OUT_W, OUT_H, focusFor(c, t));
+        if (state.progressBar){
+          g.fillStyle = "rgba(255,255,255,.28)"; g.fillRect(0, 0, OUT_W, 10);
+          g.fillStyle = "#ffe11a"; g.fillRect(0, 0, OUT_W * Math.min(1, Math.max(0, t / len)), 10);
+        }
+        if (withCaps) drawCaptions(g, c.words, t, OUT_W, OUT_H, state.flair ? c : null);
         if (state.hookTitle && (c.by === "claude" || c.titleEdited)) drawHookTitle(g, c.title, v.currentTime - c.start, OUT_W, OUT_H);
         lastDraw = performance.now();
         fill.style.width = `${Math.min(100, (v.currentTime - c.start) / len * 100)}%`;
@@ -964,6 +1102,8 @@ async function saveClip(c, i, el){
 function note(el, text){ const n = el.querySelector(".note"); n.hidden = !text; n.textContent = text; }
 
 // ---- example state so the page shows what it does before a video is picked --------
+loadSettings();
+
 (function example(){
   state.duration = 1425;
   const loud = new Float32Array(Math.ceil(state.duration / HOP));
