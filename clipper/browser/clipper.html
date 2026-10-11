@@ -94,6 +94,13 @@ input[type=range]{accent-color:var(--tape);width:100%}
   border:1px solid var(--tape);border-radius:99px;padding:1px 8px;margin-left:8px;vertical-align:middle}
 .resbar{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .resbar .btn{flex:none}
+.resbtns{display:flex;gap:8px;flex-wrap:wrap}
+.share{border:1px solid var(--line);border-radius:10px;padding:10px 11px;display:grid;gap:8px}
+.share-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:var(--dim)}
+.share-row span{margin-right:2px;text-transform:uppercase;letter-spacing:.08em}
+.pf{font-size:13px;font-weight:600;color:var(--ink);text-decoration:none;background:var(--panel-2);border:1px solid var(--line);border-radius:99px;padding:5px 11px}
+.pf:hover{border-color:var(--tape)}
+.share-hint{margin:0;font-size:12px;color:var(--dim)}
 .nudge{position:absolute;bottom:10px;right:10px;display:flex;gap:4px}
 .nudge button{background:#000b;color:var(--ink);border:0;border-radius:6px;padding:2px 7px;font:500 12px var(--f-mono)}
 .nudge button:disabled{opacity:.4}
@@ -217,7 +224,8 @@ input[type=range]{accent-color:var(--tape);width:100%}
   </section>
 
   <div class="resbar"><p class="method" id="method"></p>
-    <button class="btn primary" type="button" id="renderAll" hidden>Render all clips</button></div>
+    <span class="resbtns"><button class="btn" type="button" id="saveAll" hidden>Download all</button>
+    <button class="btn primary" type="button" id="renderAll" hidden>Render all clips</button></span></div>
   <section class="clips" id="clips" aria-live="polite"></section>
 </main>
 
@@ -358,6 +366,7 @@ segment("capStyle", "capStyle");
 segment("capPos", "capPos");
 segment("capWords", "capWords", Number);
 $("renderAll").addEventListener("click", renderAll);
+$("saveAll").addEventListener("click", saveAll);
 
 function pickFile(f){
   if (state.busy) return;
@@ -898,6 +907,15 @@ function renderCards(){
         <p class="why"></p>
         <p class="quote" hidden></p>
         <div class="post" hidden><p></p><button type="button">Copy post</button></div>
+        <div class="share" hidden>
+          <div class="share-row"><span>Post to</span>
+            <a class="pf" data-p="tiktok" href="https://www.tiktok.com/upload" target="_blank" rel="noopener">TikTok</a>
+            <a class="pf" data-p="instagram" href="https://www.instagram.com/" target="_blank" rel="noopener">Instagram</a>
+            <a class="pf" data-p="youtube" href="https://www.youtube.com/upload" target="_blank" rel="noopener">YouTube Shorts</a>
+            <a class="pf" data-p="x" href="https://x.com/compose/post" target="_blank" rel="noopener">X</a>
+          </div>
+          <p class="share-hint"></p>
+        </div>
         ${state.example ? "" : `<details class="edit"><summary>Edit title &amp; captions</summary>
           <label>Hook title<input type="text" class="e-title" maxlength="80"></label>
           <label>Captions (fix any misheard words; timing is kept)<textarea class="e-words"></textarea></label></details>`}
@@ -931,6 +949,7 @@ function renderCards(){
     c.el = el; root.append(el);
   });
   $("renderAll").hidden = state.example || !state.clips.length;
+  syncSaveAll();
 }
 
 // Edited caption text keeps the original timing: each new word takes the time at the
@@ -955,7 +974,8 @@ function retime(c, text){
 }
 function markStale(c){
   if (!c.blob || !c.el) return;
-  c.blob = null; const btn = c.el.querySelector(".btn");
+  c.blob = null; c.el.querySelector(".share").hidden = true; syncSaveAll();
+  const btn = c.el.querySelector(".btn");
   btn.textContent = "Render again"; btn.disabled = false;
   note(c.el, "Changed since the last render.");
 }
@@ -978,12 +998,14 @@ async function nudge(c, d, el){
     const ew = el.querySelector(".e-words"); if (ew){ ew.value = (c.words || []).map(w => w.text).join(" "); ew.disabled = !c.words?.length; }
     const q = el.querySelector(".quote"); q.hidden = !c.transcript; q.textContent = `“${c.transcript || ""}”`;
     c.blob = null; el.querySelector(".btn").textContent = "Render clip";
+    el.querySelector(".share").hidden = true; syncSaveAll();
     note(el, `Moved to ${fmt(c.start)}. Scores are for the original timing.`);
     drawTimeline();
     setStatus(`Found ${state.clips.length} clip${state.clips.length === 1 ? "" : "s"}. Render any of them below.`, "idle");
   } catch (e) { note(el, "Couldn't move this clip: " + (e.message || e)); }
   finally { btns.forEach(b => b.disabled = false); state.busy = false; }
 }
+function syncSaveAll(){ $("saveAll").hidden = !cap.downloads || !state.clips.some(c => c.blob); }
 async function renderAll(){
   const btn = $("renderAll"); btn.disabled = true;
   for (const [i, c] of state.clips.entries()){
@@ -1079,10 +1101,12 @@ async function renderClip(c, i, el){
     const out = document.createElement("video");
     out.src = URL.createObjectURL(c.blob); out.controls = true; out.playsInline = true;
     frameEl.querySelector("canvas")?.replaceWith(out);
-    btn.textContent = `Save .${c.ext}`;
-    note(el, cap.downloads ? `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}. Save it to your device.`
-      : `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}. Saving isn't available in this view.`);
-    if (!cap.downloads) btn.disabled = true; else btn.disabled = false;
+    btn.textContent = `Download .${c.ext}`;
+    note(el, (cap.downloads ? `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}.`
+      : `Rendered ${OUT_W}×${OUT_H}${withCaps ? " with captions" : ""}. Downloading isn't available in this view.`)
+      + (c.ext === "webm" ? " Heads up: this browser recorded WebM, which Instagram won't take. Chrome or Safari record MP4." : ""));
+    btn.disabled = !cap.downloads;
+    showShare(c, el); syncSaveAll();
   } catch (e) {
     btn.disabled = false; btn.textContent = "Render clip";
     note(el, "Rendering failed in this browser. Try Chrome or Edge on a computer.");
@@ -1092,12 +1116,53 @@ async function renderClip(c, i, el){
   }
 }
 async function saveClip(c, i, el){
-  if (!cap.downloads) return;
-  const base = state.file.name.replace(/\.[^.]+$/, "").slice(0, 60);
-  try { await cap.downloads.save({ filename: `${base} - clip ${i + 1} (${c.score}).${c.ext}`, data: c.blob }); note(el, "Saved."); }
-  catch (e) {
-    note(el, e?.code === "declined" ? "Save cancelled." : e?.code === "too_large" ? "That file is too large to save here." : "Couldn't save the file in this view.");
+  if (!cap.downloads || !c.blob) return false;
+  const clean = t => String(t || "").replace(/[^\p{L}\p{N} _-]+/gu, "").replace(/\s+/g, " ").trim().slice(0, 60);
+  const name = clean(c.by === "claude" || c.titleEdited ? c.title : "") || `${clean(state.file.name.replace(/\.[^.]+$/, ""))} clip ${i + 1}`;
+  try {
+    await cap.downloads.save({ filename: `${name}.${c.ext}`, data: c.blob });
+    note(el, "Downloaded. Use the Post buttons below to put it up."); return true;
+  } catch (e) {
+    note(el, e?.code === "declined" ? "Download cancelled." : e?.code === "too_large" ? "That file is too large to download here." : "Couldn't download the file in this view.");
+    return false;
   }
+}
+async function saveAll(){
+  const btn = $("saveAll"); btn.disabled = true;
+  for (const [i, c] of state.clips.entries()) if (c.blob && c.el) await saveClip(c, i, c.el);
+  btn.disabled = false;
+}
+// ---- posting: the page can't upload for you (platforms only take uploads from your
+// logged-in account), so each button copies the caption and opens that upload page.
+const TYPE_TAGS = { podcast: "#podcast #clips", gaming: "#gaming #clips", sports: "#sports #highlights",
+  comedy: "#comedy #funny", education: "#learnontiktok #tips", vlog: "#vlog #irl", music: "#music #live" };
+function postText(c){
+  if (c.post) return c.post;
+  const lead = c.by === "claude" || c.titleEdited ? c.title : (c.transcript || "").split(/(?<=[.!?])\s/)[0].slice(0, 120);
+  return `${lead || "New clip"} ${TYPE_TAGS[state.vtype] || "#shorts #fyp"}`.trim();
+}
+const PLATFORM = { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube Shorts", x: "X" };
+function showShare(c, el){
+  const box = el.querySelector(".share"); if (!box) return;
+  box.hidden = false;
+  const phone = matchMedia("(pointer: coarse)").matches;
+  box.querySelector(".share-hint").textContent = phone
+    ? "On a phone, TikTok and Instagram only take uploads in their apps: tap Download, then share the saved video from your camera roll. The buttons copy your caption."
+    : "Download first. Each button copies the caption and opens the upload page: drop in the video, then paste.";
+  const x = box.querySelector('[data-p="x"]');
+  x.href = `https://x.com/intent/post?text=${encodeURIComponent(postText(c))}`;
+  if (box.dataset.wired) return;
+  box.dataset.wired = "1";
+  for (const a of box.querySelectorAll(".pf")) a.addEventListener("click", async () => {
+    const text = postText(c), where = PLATFORM[a.dataset.p];
+    try {
+      await navigator.clipboard.writeText(a.dataset.p === "youtube" ? `${c.title}\n\n${text}` : text);
+      note(el, a.dataset.p === "x" ? "X opened with your caption filled in. Attach the downloaded video and post."
+        : `Caption copied. In ${where}, upload the downloaded video and paste the caption.`);
+    } catch {
+      note(el, `${where} opened. Copy the caption from the post box above and paste it there.`);
+    }
+  });
 }
 function note(el, text){ const n = el.querySelector(".note"); n.hidden = !text; n.textContent = text; }
 
