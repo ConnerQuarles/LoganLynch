@@ -1,7 +1,6 @@
+# The Clipper website (python -m clipper.app). Speech-to-text runs in the browser.
 flask>=3.0
-numpy>=1.24
-opencv-python-headless>=4.8,<5   # 5.x dropped the Haar face detector
-faster-whisper>=1.0
-anthropic>=0.70
-yt-dlp[default,curl-cffi]        # downloads from pasted links (curl-cffi: TikTok)
-imageio-ffmpeg>=0.5              # bundled ffmpeg if you don't have one installed
+anthropic>=1.0                         # Claude scoring with your API key
+yt-dlp[default,curl-cffi,deno]         # pasted links; curl-cffi for TikTok, deno for YouTube
+imageio-ffmpeg>=0.5                    # bundled ffmpeg so yt-dlp can merge video + audio
+certifi                                # HTTPS certificates on Python builds that lack them

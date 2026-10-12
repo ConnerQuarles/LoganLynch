@@ -3,9 +3,12 @@
 End result: `https://clips.yourdomain.com`, password-protected, HTTPS, restarts
 on its own after crashes and reboots.
 
-**Sizing:** 2 vCPU / 8 GB RAM (Hostinger KVM 2) handles it; expect a 10-minute
-video to take several minutes. On 1 vCPU set `CLIP_WHISPER_MODEL=base`. The image
-is ~2.5 GB, and uploads + clips live on disk for `CLIP_KEEP_HOURS` (default 24).
+**Sizing:** the server only fetches pasted links and calls Claude; each viewer's browser
+does the transcription and rendering, so a 1-2 vCPU plan is plenty. The image is ~1 GB,
+and downloaded videos live on disk for `CLIP_KEEP_HOURS` (default 24).
+
+**Just want it on your own computer?** You don't need any of this: double-click
+`start-clipper.bat` (Windows) or `start-clipper.command` (Mac) in the repo root.
 
 ## 1. Point a subdomain at the VPS
 

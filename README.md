@@ -37,5 +37,7 @@ placement without a clear resets it.
 
 ## Also in this repo
 
-[`clipper/`](clipper/README.md) — an OpusClip-style tool that cuts a video's best 30-second
-moments into vertical, captioned clips, each rated out of 100.
+[`clipper/`](clipper/README.md): an OpusClip-style tool that turns a long video or a
+pasted YouTube/TikTok link into vertical, captioned clips rated out of 100. Double-click
+`start-clipper.bat` (Windows) or `start-clipper.command` (Mac) to run it at
+http://localhost:8000.

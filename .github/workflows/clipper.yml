@@ -40,7 +40,7 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-          cache-dependency-path: clipper/requirements.txt
+          cache-dependency-path: clipper/requirements-pipeline.txt
 
       - uses: denoland/setup-deno@v2   # yt-dlp needs a JS runtime for YouTube
         if: steps.req.outputs.files != ''
@@ -54,7 +54,7 @@ jobs:
 
       - name: Install
         if: steps.req.outputs.files != ''
-        run: pip install -r clipper/requirements.txt
+        run: pip install -r clipper/requirements-pipeline.txt
 
       - name: Make clips
         if: steps.req.outputs.files != ''

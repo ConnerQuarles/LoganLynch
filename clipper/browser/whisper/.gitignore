@@ -3,3 +3,4 @@
 model/
 transformers.min.js
 ort-wasm-simd-threaded.jsep.mjs
+.complete

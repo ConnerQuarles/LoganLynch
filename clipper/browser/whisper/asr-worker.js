@@ -3,7 +3,7 @@
 // split into pieces the artifact host will serve (<=15 MB; model weights as base64 text)
 // and reassembled here.
 // Assembled files are kept in IndexedDB so later visits skip the ~100 MB download.
-// fetch-assets.sh rebuilds the chunks from npm.
+// clipper/assets.py builds the chunks from npm (the local website runs it on first start).
 
 const BASE = new URL("./", self.location.href).href;
 const FILES = {

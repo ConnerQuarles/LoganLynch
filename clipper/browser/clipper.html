@@ -28,6 +28,18 @@ button{cursor:pointer}
 :focus-visible{outline:2px solid var(--tape);outline-offset:2px}
 
 /* Setup row */
+.src{display:grid;gap:10px;align-content:start}
+.linkrow{display:flex;gap:10px;flex-wrap:wrap}
+.linkrow input{flex:1 1 240px;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px;font-size:15px}
+.linkrow input:focus{outline:none;border-color:var(--tape)}
+.linkrow .go{padding:12px 18px}
+.keybox{border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.keybox summary{cursor:pointer;font-weight:600;font-size:14px}
+.keybox summary span{font-weight:500;color:var(--dim);margin-left:6px}
+.keybox .hint a{color:var(--tape)}
+.keyrow{display:flex;gap:8px;flex-wrap:wrap;margin-top:6px}
+.keyrow input{flex:1 1 180px;min-width:0;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-family:var(--f-mono);font-size:13px}
+.keyrow .btn{flex:none}
 .setup{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:16px}
 @media (max-width:760px){.setup{grid-template-columns:1fr}}
 .drop{display:grid;place-items:center;text-align:center;gap:6px;min-height:170px;border:1.5px dashed var(--line);
@@ -67,7 +79,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 .frame{position:relative;background:#000;aspect-ratio:9/16;max-width:100%}
 .frame canvas,.frame video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:block}
 .rank{position:absolute;top:10px;left:10px;background:#000b;border-radius:99px;padding:2px 9px;font-weight:600;font-size:13px}
-.tc{position:absolute;bottom:10px;left:10px;background:#000b;border-radius:6px;padding:2px 7px;font-size:12px}
+.tc{position:absolute;top:10px;right:10px;background:#000b;border-radius:6px;padding:2px 7px;font-size:12px}
 .body{padding:14px 16px 16px;display:flex;flex-direction:column;gap:10px;flex:1}
 .head{display:flex;gap:12px;align-items:center}
 .ring{flex:none;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;
@@ -101,7 +113,7 @@ input[type=range]{accent-color:var(--tape);width:100%}
 .pf{font-size:13px;font-weight:600;color:var(--ink);text-decoration:none;background:var(--panel-2);border:1px solid var(--line);border-radius:99px;padding:5px 11px}
 .pf:hover{border-color:var(--tape)}
 .share-hint{margin:0;font-size:12px;color:var(--dim)}
-.nudge{position:absolute;bottom:10px;right:10px;display:flex;gap:4px}
+.nudge{position:absolute;top:40px;right:10px;display:flex;gap:4px}
 .nudge button{background:#000b;color:var(--ink);border:0;border-radius:6px;padding:2px 7px;font:500 12px var(--f-mono)}
 .nudge button:disabled{opacity:.4}
 .edit{font-size:13px}
@@ -124,12 +136,19 @@ input[type=range]{accent-color:var(--tape);width:100%}
   </header>
 
   <section class="setup">
+    <div class="src">
+    <form class="linkrow" id="linkForm" hidden>
+      <input id="linkUrl" type="url" inputmode="url" autocomplete="off" required
+        placeholder="Paste a YouTube, TikTok, Instagram or X link" aria-label="Video link">
+      <button class="go" id="linkGo" type="submit">Get video</button>
+    </form>
     <label class="drop" id="drop" for="file">
       <strong>Drop a video or click to choose</strong>
       <small>MP4 or WebM works best · up to a few hundred MB</small>
       <span class="file" id="fileName"></span>
       <input type="file" id="file" accept="video/*" hidden>
     </label>
+    </div>
     <div class="opts">
       <div class="field"><span>Video type</span>
         <div class="seg" id="vtype" role="group" aria-label="Video type">
@@ -213,6 +232,18 @@ input[type=range]{accent-color:var(--tape);width:100%}
       </div>
       <button class="go" id="go" disabled>Find clips</button>
       <p class="hint" id="aiHint">Claude rates each moment from its frames and audio. Your first run asks permission to use your Claude account.</p>
+      <details class="keybox" id="keyBox" hidden>
+        <summary>Claude API key <span id="keyState"></span></summary>
+        <p class="hint">Used to score moments, write titles and captions, and aim the smart crop: about 5–15¢ per video.
+          Get one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.
+          It's saved only on this computer.</p>
+        <form class="keyrow" id="keyForm">
+          <input id="keyInput" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key">
+          <button class="btn" type="submit">Save</button>
+          <button class="btn" type="button" id="keyClear">Remove</button>
+        </form>
+        <p class="hint" id="keyMsg"></p>
+      </details>
     </div>
   </section>
 
@@ -244,6 +275,7 @@ if (window.claude?.use) {
   window.claude.use("downloads").then(d => { cap.downloads = d; }).catch(() => {});
 }
 function aiHint(){
+  if (window.CLIPPER_LOCAL) return;          // the local key panel explains it instead
   $("aiHint").textContent = cap.sample
     ? "Claude rates each moment from its frames and audio. Your first run asks permission to use your Claude account."
     : "Moments are rated by audio energy (Claude rating isn't available in this view).";
@@ -367,6 +399,64 @@ segment("capPos", "capPos");
 segment("capWords", "capWords", Number);
 $("renderAll").addEventListener("click", renderAll);
 $("saveAll").addEventListener("click", saveAll);
+
+// ---- running on your computer (python -m clipper.app): pasted links + your API key ----
+if (window.CLIPPER_LOCAL){
+  $("linkForm").hidden = false; $("keyBox").hidden = false;
+  $("drop").querySelector("strong").textContent = "…or drop a video file here";
+  const jpost = (url, body) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const showKey = s => {
+    $("keyState").textContent = s.has_key ? `· saved (${s.key_hint})` : "· not set";
+    $("aiHint").textContent = s.has_key
+      ? `Claude (${s.model}) scores moments with your API key.`
+      : "Add your Claude API key below for Claude scoring. Without it, moments are rated by audio energy.";
+    if (!s.has_key) $("keyBox").open = true;
+    $("keyClear").hidden = !s.has_key || s.from_env;
+    if (s.from_env) $("keyMsg").textContent = "Using the key from the ANTHROPIC_API_KEY environment variable.";
+  };
+  fetch("/api/settings").then(r => r.json()).then(showKey).catch(() => {});
+  $("keyForm").addEventListener("submit", async e => {
+    e.preventDefault();
+    const key = $("keyInput").value.trim(); if (!key) return;
+    const r = await jpost("/api/settings", { anthropic_api_key: key }).catch(() => null);
+    const d = r ? await r.json().catch(() => ({})) : {};
+    $("keyMsg").textContent = r?.ok ? "Saved on this computer." : (d.error || "Couldn't save the key.");
+    if (r?.ok){ $("keyInput").value = ""; showKey(d); }
+  });
+  $("keyClear").addEventListener("click", async () => {
+    const r = await jpost("/api/settings", { anthropic_api_key: "" }).catch(() => null);
+    if (r?.ok){ $("keyMsg").textContent = "Removed."; showKey(await r.json()); }
+  });
+  $("linkForm").addEventListener("submit", e => { e.preventDefault(); fetchLink($("linkUrl").value.trim()); });
+}
+async function fetchLink(url){
+  if (state.busy || !url) return;
+  state.busy = true; $("go").disabled = true; $("linkGo").disabled = true;
+  let file = null;
+  try {
+    setStatus("Getting the video's info…");
+    const r = await fetch("/api/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.error || "Couldn't start the download.");
+    let job;
+    for (;;){
+      await new Promise(res => setTimeout(res, 700));
+      job = await (await fetch(`/api/fetch/${d.id}`)).json();
+      if (job.state === "error") throw new Error(job.error || "The download failed.");
+      if (job.state === "done") break;
+      setStatus(job.stage === "download" ? `Downloading the video… ${Math.round((job.pct || 0) * 100)}%` : "Getting the video's info…");
+    }
+    setStatus("Opening the downloaded video…");
+    const blob = await (await fetch(`/api/fetch/${d.id}/file`)).blob();
+    const name = String(job.title || "video").replace(/[\\/:*?"<>|]+/g, " ").trim().slice(0, 80) || "video";
+    file = new File([blob], `${name}.${job.ext || "mp4"}`, { type: blob.type || "video/mp4" });
+  } catch (e) {
+    setStatus(e.message || "Couldn't get that video.", "err");
+  } finally {
+    state.busy = false; $("linkGo").disabled = false; $("go").disabled = !state.file;
+  }
+  if (file){ pickFile(file); run(); }
+}
 
 function pickFile(f){
   if (state.busy) return;
@@ -722,6 +812,11 @@ function claudeError(e){
     case "not_granted": case "sampling_disabled": case "images_unavailable":
       return "Claude rating is off for this view, so moments were rated by audio energy only.";
     case "rate_limited": return "Claude is rate-limited right now, so moments were rated by audio energy. Try again in a bit.";
+    case "no_key": return "Add your Claude API key (under Find clips) to get Claude scoring. This time moments were rated by audio energy.";
+    case "bad_key": return "Anthropic rejected your Claude API key, so moments were rated by audio energy. Check it under Find clips.";
+    case "no_credits": return "Your Anthropic account is out of credits (console.anthropic.com → Billing), so moments were rated by audio energy.";
+    case "workspace": return "Your API key isn't tied to a workspace. Create a key inside a workspace in the Anthropic Console. Moments were rated by audio energy.";
+    case "refused": return "Claude declined to rate this video, so moments were rated by audio energy.";
     default: return "Claude couldn't rate these moments this time, so they were rated by audio energy.";
   }
 }

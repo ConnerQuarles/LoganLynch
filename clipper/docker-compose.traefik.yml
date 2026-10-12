@@ -7,8 +7,6 @@ services:
     build:
       context: ..
       dockerfile: clipper/Dockerfile
-      args:
-        WHISPER_MODEL: ${CLIP_WHISPER_MODEL:-small}
     restart: unless-stopped
     environment:
       CLIP_PASSWORD: ${CLIP_PASSWORD:?Set CLIP_PASSWORD in .env}
